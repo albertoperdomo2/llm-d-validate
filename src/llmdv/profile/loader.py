@@ -1,10 +1,12 @@
 """YAML -> Profile, with diagnostics that name the path that is wrong.
 
-Problems are found in two passes. `load` checks types and shapes, and raises `ProfileError` at
-the first value it cannot turn into an object. `validate` runs on a loaded profile and collects
-every range, cross-field and cross-section problem as a `Diagnostic`, because a profile is edited
-as a whole and a check that reports one error per run wastes a round trip each time. Both name
-the path that is wrong.
+Problems are found in two passes, and each reports every problem it finds rather than the first,
+because a profile is edited as a whole and a check that reports one error per run wastes a round
+trip each time. `load` checks types and shapes: a value that cannot be turned into an object at
+all, such as a string where a list belongs. It raises one `ProfileError` with a line per problem,
+each naming the file and the path. `validate` runs on a loaded profile and returns ranges,
+cross-field and cross-section problems as `Diagnostic`s. A value an ingress inherits is checked
+once, where it was declared.
 
 `validate` is offline by design. It resolves no secrets and contacts no cluster, so a profile
 can be written and checked on a laptop with no access to the fleet it describes. Missing
@@ -20,7 +22,9 @@ import json
 import math
 import os
 import re
+from collections.abc import Callable, Iterable
 from dataclasses import fields
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -107,7 +111,10 @@ def load(path: str | Path) -> Profile:
         raise ProfileError(f"{file_path}: invalid YAML: {exc}") from exc
     if not isinstance(raw, dict):
         raise ProfileError(f"{file_path}: top level must be a mapping")
-    return _build(raw, file_path)
+    try:
+        return _build(raw, file_path)
+    except ProfileError as exc:
+        raise ProfileError(*(f"{file_path}: {problem}" for problem in exc.problems)) from exc
 
 
 def validate(profile: Profile) -> list[Diagnostic]:
@@ -283,24 +290,43 @@ def validate(profile: Profile) -> list[Diagnostic]:
 
 
 def validate_models(profile: Profile) -> list[Diagnostic]:
-    """Model rules shared by offline validation and native pytest before any requests."""
-    models = [("model", profile.model)] + [
-        (f"ingresses({ingress.id}).model", ingress.model) for ingress in profile.ingresses
-    ]
+    """Model rules shared by offline validation and native pytest before any requests.
+
+    A problem is reported where it was declared: at `model` for a value every ingress inherits,
+    and at an ingress only for a value that ingress overrides.
+    """
+    out = _model_diagnostics("model", profile.model, None)
+    for index, ingress in enumerate(profile.ingresses):
+        where = f"ingresses[{index}]({ingress.id}).model"
+        out += _model_diagnostics(where, ingress.model, profile.model)
+    return out
+
+
+def _model_diagnostics(where: str, model: Model, inherited: Model | None) -> list[Diagnostic]:
+    def declared_here(name: str) -> bool:
+        return inherited is None or getattr(model, name) != getattr(inherited, name)
+
     out = []
-    for where, model in models:
-        if not model.public_id:
-            out.append(Diagnostic("error", f"{where}.public_id", "required"))
-        if model.max_model_len is not None and model.max_model_len < 0:
-            out.append(Diagnostic("error", f"{where}.max_model_len", "must not be negative"))
-        if model.reasoning.is_separate_field and model.reasoning.is_inline:
-            out.append(
-                Diagnostic(
-                    "warning",
-                    f"{where}.reasoning",
-                    "both field and inline_tag are set; the field is preferred when present",
-                )
+    if not model.public_id and declared_here("public_id"):
+        out.append(Diagnostic("error", f"{where}.public_id", "required"))
+    if (
+        model.max_model_len is not None
+        and model.max_model_len < 0
+        and declared_here("max_model_len")
+    ):
+        out.append(Diagnostic("error", f"{where}.max_model_len", "must not be negative"))
+    if (
+        model.reasoning.is_separate_field
+        and model.reasoning.is_inline
+        and declared_here("reasoning")
+    ):
+        out.append(
+            Diagnostic(
+                "warning",
+                f"{where}.reasoning",
+                "both field and inline_tag are set; the field is preferred when present",
             )
+        )
     return out
 
 
@@ -330,34 +356,79 @@ def resolve_all_secrets(profile: Profile) -> dict[str, str]:
 
 
 def _build(raw: dict[str, Any], path: Path) -> Profile:
+    # What each ingress inherits. A top-level block that fails to parse is reported once, where
+    # it was declared, and its ingresses then check only their own overrides.
+    defaults: dict[str, dict[str, Any]] = {"model": {}, "capabilities": {}}
+
+    def inherited(key: str, parse_block):
+        def run():
+            block = _block(raw.get(key), key)
+            value = parse_block(block)
+            defaults[key] = block
+            return value
+
+        return run
+
     try:
-        model_raw = raw.get("model") or {}
-        capabilities_raw = raw.get("capabilities") or {}
-        model = _model(model_raw)
-        capabilities = _capabilities(capabilities_raw)
         return Profile(
-            schema=str(raw.get("schema", SUPPORTED_SCHEMA)),
-            name=str(raw.get("name") or path.stem),
-            vantage=_enum(Vantage, raw.get("vantage"), Vantage.EXTERNAL, "vantage"),
-            environment=_environment(raw.get("environment") or {}),
-            model=model,
-            ingresses=tuple(
-                _ingress(item, model_raw, capabilities_raw) for item in (raw.get("ingresses") or [])
-            ),
-            capabilities=capabilities,
-            headers=_headers(raw.get("headers") or {}),
-            clients=tuple(_client(item, path.parent) for item in (raw.get("clients") or [])),
-            fleet_policy=_enum(
-                FleetPolicy, raw.get("fleet_policy"), FleetPolicy.DEDICATED, "fleet_policy"
+            **_each(
+                schema=lambda: str(raw.get("schema", SUPPORTED_SCHEMA)),
+                name=lambda: str(raw.get("name") or path.stem),
+                vantage=lambda: _enum(Vantage, raw.get("vantage"), Vantage.EXTERNAL, "vantage"),
+                environment=lambda: _environment(_block(raw.get("environment"), "environment")),
+                model=inherited("model", _model),
+                capabilities=inherited("capabilities", _capabilities),
+                ingresses=lambda: _every(
+                    partial(
+                        _ingress,
+                        item,
+                        f"ingresses[{index}]",
+                        defaults["model"],
+                        defaults["capabilities"],
+                    )
+                    for index, item in _entries(raw.get("ingresses"), "ingresses")
+                ),
+                headers=lambda: _headers(_block(raw.get("headers"), "headers")),
+                clients=lambda: _every(
+                    partial(_client, item, f"clients[{index}]", path.parent)
+                    for index, item in _entries(raw.get("clients"), "clients")
+                ),
+                fleet_policy=lambda: _enum(
+                    FleetPolicy, raw.get("fleet_policy"), FleetPolicy.DEDICATED, "fleet_policy"
+                ),
+                fleet=lambda: parse_fleet(raw.get("fleet")),
+                known_failures=lambda: _known_failures(raw.get("known_failures")),
             ),
             source_path=path,
-            fleet=parse_fleet(raw.get("fleet")),
-            known_failures=_known_failures(raw.get("known_failures")),
         )
     except ProfileError:
         raise
     except (TypeError, ValueError, AttributeError) as exc:
-        raise ProfileError(f"{path}: {exc}") from exc
+        # A shape no parser checks for. The file is named by `load`, which adds it to every line.
+        raise ProfileError(str(exc)) from exc
+
+
+def _each(**parsers: Callable[[], Any]) -> dict[str, Any]:
+    """Run every parser and return their values, or raise once with every problem they found.
+
+    A profile is edited as a whole, so one load reports all of its type and shape errors rather
+    than one per run.
+    """
+    values: dict[str, Any] = {}
+    problems: list[str] = []
+    for name, parse_value in parsers.items():
+        try:
+            values[name] = parse_value()
+        except ProfileError as exc:
+            problems += exc.problems
+    if problems:
+        raise ProfileError(*problems)
+    return values
+
+
+def _every(parsers: Iterable[Callable[[], Any]]) -> tuple[Any, ...]:
+    """`_each` over a list's entries, in order."""
+    return tuple(_each(**{str(index): item for index, item in enumerate(parsers)}).values())
 
 
 _ISSUE = re.compile(r"^(?:[\w.-]+/[\w.-]+)?#\d+$|^https?://\S+$")
@@ -415,6 +486,29 @@ def _known_failures(raw: Any) -> tuple[KnownFailure, ...]:
             )
         )
     return tuple(out)
+
+
+def _block(value: Any, where: str) -> dict[str, Any]:
+    """An optional mapping: empty when undeclared."""
+    return {} if value is None else parse.mapping(value, where)
+
+
+def _entries(value: Any, where: str) -> list[tuple[int, dict[str, Any]]]:
+    """An optional list of mappings, each with its index, so a problem names the entry."""
+    if value is None:
+        return []
+    return [
+        (index, parse.mapping(item, f"{where}[{index}]"))
+        for index, item in enumerate(parse.items(value, where))
+    ]
+
+
+def _number(convert, value: Any, where: str):
+    """A number as `convert` reads it, naming the path when it cannot."""
+    try:
+        return convert(value)
+    except (TypeError, ValueError):
+        raise ProfileError(f"{where}: expected a number, got {value!r}") from None
 
 
 def _one_or_more(value: Any, where: str) -> tuple[str, ...]:
@@ -549,125 +643,157 @@ def _ingress_capabilities(override: Any, defaults: dict[str, Any], where: str) -
 def _model(raw: dict[str, Any], where: str = "model") -> Model:
     reasoning_raw = raw.get("reasoning") or {}
     tools_raw = raw.get("tools") or {}
-    limit = raw.get("max_model_len")
-    if limit is not None and type(limit) is not int:
-        raise ProfileError(f"{where}.max_model_len: expected an integer or null, got {limit!r}")
     return Model(
-        public_id=parse.string(raw.get("public_id", ""), f"{where}.public_id"),
-        aliases=parse.strings(raw.get("aliases", ()), f"{where}.aliases"),
-        max_model_len=limit,
-        answer_max_tokens=_opt_positive_int(
-            raw.get("answer_max_tokens"), f"{where}.answer_max_tokens"
-        ),
-        reasoning=Reasoning(
-            parser=_nullable_string(reasoning_raw.get("parser"), f"{where}.reasoning.parser"),
-            field_name=_nullable_string(reasoning_raw.get("field"), f"{where}.reasoning.field"),
-            inline_tag=_nullable_string(
-                reasoning_raw.get("inline_tag"),
-                f"{where}.reasoning.inline_tag",
+        **_each(
+            public_id=lambda: parse.string(raw.get("public_id", ""), f"{where}.public_id"),
+            aliases=lambda: parse.strings(raw.get("aliases", ()), f"{where}.aliases"),
+            max_model_len=lambda: _max_model_len(raw.get("max_model_len"), where),
+            answer_max_tokens=lambda: _opt_positive_int(
+                raw.get("answer_max_tokens"), f"{where}.answer_max_tokens"
             ),
-            default_on=parse.flag(
-                reasoning_raw.get("default_on"),
-                False,
-                f"{where}.reasoning.default_on",
+            reasoning=lambda: Reasoning(
+                parser=_nullable_string(reasoning_raw.get("parser"), f"{where}.reasoning.parser"),
+                field_name=_nullable_string(reasoning_raw.get("field"), f"{where}.reasoning.field"),
+                inline_tag=_nullable_string(
+                    reasoning_raw.get("inline_tag"),
+                    f"{where}.reasoning.inline_tag",
+                ),
+                default_on=parse.flag(
+                    reasoning_raw.get("default_on"),
+                    False,
+                    f"{where}.reasoning.default_on",
+                ),
             ),
-        ),
-        tools=Tools(
-            parser=_nullable_string(tools_raw.get("parser"), f"{where}.tools.parser"),
-            auto_choice=parse.flag(
-                tools_raw.get("auto_choice"),
-                False,
-                f"{where}.tools.auto_choice",
+            tools=lambda: Tools(
+                parser=_nullable_string(tools_raw.get("parser"), f"{where}.tools.parser"),
+                auto_choice=parse.flag(
+                    tools_raw.get("auto_choice"),
+                    False,
+                    f"{where}.tools.auto_choice",
+                ),
+                forced_finish_reason=parse.one_of(
+                    tools_raw.get("forced_finish_reason"),
+                    CHAT_FORCED_TOOL_FINISHES,
+                    f"{where}.tools.forced_finish_reason",
+                    "tool_calls",
+                ),
+                markup=_markup(tools_raw.get("markup", ()), f"{where}.tools.markup"),
+                strict_level=parse.one_of(
+                    tools_raw.get("strict_level"),
+                    TOOL_STRICT_LEVELS,
+                    f"{where}.tools.strict_level",
+                    "auto",
+                ),
             ),
-            forced_finish_reason=parse.one_of(
-                tools_raw.get("forced_finish_reason"),
-                CHAT_FORCED_TOOL_FINISHES,
-                f"{where}.tools.forced_finish_reason",
-                "tool_calls",
-            ),
-            markup=_markup(tools_raw.get("markup", ()), f"{where}.tools.markup"),
-            strict_level=parse.one_of(
-                tools_raw.get("strict_level"),
-                TOOL_STRICT_LEVELS,
-                f"{where}.tools.strict_level",
-                "auto",
-            ),
-        ),
+        )
     )
 
 
-def _base_url(raw: dict[str, Any], ingress_id: str) -> str:
+def _max_model_len(limit: Any, where: str) -> int | None:
+    if limit is not None and type(limit) is not int:
+        raise ProfileError(f"{where}.max_model_len: expected an integer or null, got {limit!r}")
+    return limit
+
+
+def _base_url(raw: dict[str, Any], at: str) -> str:
     """`base_url`, or the value of the variable `base_url_env` names. Never both."""
     env = _opt_str(raw.get("base_url_env"))
     if env and raw.get("base_url"):
-        raise ProfileError(f"ingresses({ingress_id}): declare base_url or base_url_env, not both")
+        raise ProfileError(f"{at}: declare base_url or base_url_env, not both")
     value = os.environ.get(env, "") if env else str(raw.get("base_url") or "")
     return value.strip().rstrip("/")
 
 
 def _ingress(
-    raw: dict[str, Any], model_defaults: dict[str, Any], capability_defaults: dict[str, Any]
+    raw: dict[str, Any],
+    where: str,
+    model_defaults: dict[str, Any],
+    capability_defaults: dict[str, Any],
 ) -> Ingress:
     ingress_id = str(raw.get("id") or "")
-    auth_raw = raw.get("auth") or {}
-    timeouts_raw = raw.get("timeouts") or {}
-    setup_raw = raw.get("setup") or {}
+    at = f"{where}({ingress_id})"
     ingress = Ingress(
         id=ingress_id,
-        model=_ingress_model(
-            raw.get("model", {}), model_defaults, f"ingresses({ingress_id}).model"
-        ),
-        capabilities=_ingress_capabilities(
-            raw.get("capabilities", {}),
-            capability_defaults,
-            f"ingresses({ingress_id}).capabilities",
-        ),
-        kind=_enum(IngressKind, raw.get("kind"), IngressKind.VLLM, f"ingresses({ingress_id}).kind"),
-        base_url=_base_url(raw, ingress_id),
-        base_url_env=_opt_str(raw.get("base_url_env")),
-        auth=Auth(
-            type=_enum(
-                AuthType, auth_raw.get("type"), AuthType.NONE, f"ingresses({ingress_id}).auth.type"
+        **_each(
+            model=lambda: _ingress_model(raw.get("model", {}), model_defaults, f"{at}.model"),
+            capabilities=lambda: _ingress_capabilities(
+                raw.get("capabilities", {}), capability_defaults, f"{at}.capabilities"
             ),
-            key_env=_opt_str(auth_raw.get("key_env")),
-        ),
-        health_path=str(raw.get("health_path") or "/health"),
-        surfaces=_optional_strings(raw.get("surfaces"), f"ingresses({ingress_id}).surfaces"),
-        timeouts=Timeouts(
-            connect=float(timeouts_raw.get("connect", 5.0)),
-            request=float(timeouts_raw.get("request", 600.0)),
-            stream_idle=float(timeouts_raw.get("stream_idle", 60.0)),
-        ),
-        error_status={
-            str(key): tuple(int(code) for code in _as_list(value))
-            for key, value in (raw.get("error_status") or {}).items()
-        },
-        unstructured_errors=_optional_strings(
-            raw.get("unstructured_errors"), f"ingresses({ingress_id}).unstructured_errors"
-        ),
-        rate_limited=parse.flag(
-            raw.get("rate_limited"), False, f"ingresses[{raw.get('id')}].rate_limited"
-        ),
-        logs=tuple(_log_source(item) for item in (raw.get("logs") or [])),
-        tls=Tls(verify=parse.flag((raw.get("tls") or {}).get("verify"), True, "tls.verify")),
-        transport=transport_contract.parse(
-            raw.get("transport"), f"ingresses({ingress_id}).transport"
-        ),
-        setup=Setup(
-            proxy=_enum(
-                ProxyMode,
-                setup_raw.get("proxy"),
-                ProxyMode.BYPASS,
-                f"ingresses({ingress_id}).setup.proxy",
+            kind=lambda: _enum(IngressKind, raw.get("kind"), IngressKind.VLLM, f"{at}.kind"),
+            base_url=lambda: _base_url(raw, at),
+            base_url_env=lambda: _opt_str(raw.get("base_url_env")),
+            auth=lambda: _auth(_block(raw.get("auth"), f"{at}.auth"), f"{at}.auth"),
+            health_path=lambda: str(raw.get("health_path") or "/health"),
+            surfaces=lambda: _optional_strings(raw.get("surfaces"), f"{at}.surfaces"),
+            timeouts=lambda: _timeouts(_block(raw.get("timeouts"), f"{at}.timeouts"), at),
+            error_status=lambda: _error_status(
+                _block(raw.get("error_status"), f"{at}.error_status"), f"{at}.error_status"
             ),
-            requires=tuple(_requirement(item) for item in (setup_raw.get("requires") or [])),
+            unstructured_errors=lambda: _optional_strings(
+                raw.get("unstructured_errors"), f"{at}.unstructured_errors"
+            ),
+            rate_limited=lambda: parse.flag(raw.get("rate_limited"), False, f"{at}.rate_limited"),
+            logs=lambda: _every(
+                partial(_log_source, item, f"{at}.logs[{index}]")
+                for index, item in _entries(raw.get("logs"), f"{at}.logs")
+            ),
+            tls=lambda: Tls(
+                verify=parse.flag(
+                    _block(raw.get("tls"), f"{at}.tls").get("verify"), True, f"{at}.tls.verify"
+                )
+            ),
+            transport=lambda: transport_contract.parse(raw.get("transport"), f"{at}.transport"),
+            setup=lambda: _setup(_block(raw.get("setup"), f"{at}.setup"), f"{at}.setup"),
         ),
     )
-    _check_http_redirect(ingress)
+    _check_http_redirect(ingress, at)
     return ingress
 
 
-def _check_http_redirect(ingress: Ingress) -> None:
+def _auth(raw: dict[str, Any], where: str) -> Auth:
+    return Auth(
+        type=_enum(AuthType, raw.get("type"), AuthType.NONE, f"{where}.type"),
+        key_env=_opt_str(raw.get("key_env")),
+    )
+
+
+def _timeouts(raw: dict[str, Any], at: str) -> Timeouts:
+    return Timeouts(
+        **_each(
+            **{
+                name: partial(_number, float, raw.get(name, default), f"{at}.timeouts.{name}")
+                for name, default in (("connect", 5.0), ("request", 600.0), ("stream_idle", 60.0))
+            }
+        )
+    )
+
+
+def _setup(raw: dict[str, Any], where: str) -> Setup:
+    return Setup(
+        **_each(
+            proxy=lambda: _enum(ProxyMode, raw.get("proxy"), ProxyMode.BYPASS, f"{where}.proxy"),
+            requires=lambda: _every(
+                partial(_requirement, item, f"{where}.requires[{index}]")
+                for index, item in _entries(raw.get("requires"), f"{where}.requires")
+            ),
+        )
+    )
+
+
+def _error_status(raw: dict[str, Any], where: str) -> dict[str, tuple[int, ...]]:
+    """Statuses per error class. A scalar is a one-element list."""
+    out = {}
+    for key, value in raw.items():
+        at = f"{where}.{key}"
+        if isinstance(value, (list, tuple)):
+            codes = [(f"{at}[{index}]", code) for index, code in enumerate(value)]
+        else:
+            codes = [(at, value)]
+        out[str(key)] = tuple(_number(int, code, path) for path, code in codes)
+    return out
+
+
+def _check_http_redirect(ingress: Ingress, at: str) -> None:
     """`transport.http_redirect` belongs on an ingress reached over TLS on the default port.
 
     Only a literal `base_url` is checked here. A value from `base_url_env` is the operator's
@@ -677,14 +803,14 @@ def _check_http_redirect(ingress: Ingress) -> None:
         return
     reason = transport_contract.plain_http_url(ingress.base_url)[1]
     if reason:
-        raise ProfileError(f"ingresses({ingress.id}): {reason}")
+        raise ProfileError(f"{at}: {reason}")
 
 
-def _requirement(raw: dict[str, Any]) -> Requirement:
+def _requirement(raw: dict[str, Any], where: str) -> Requirement:
     return Requirement(
         kind=str(raw.get("kind") or "port_forward"),
-        local_port=_opt_int(raw.get("local_port")),
-        remote_port=_opt_int(raw.get("remote_port")),
+        local_port=_opt_int(raw.get("local_port"), f"{where}.local_port"),
+        remote_port=_opt_int(raw.get("remote_port"), f"{where}.remote_port"),
         namespace=_opt_str(raw.get("namespace")),
         target=_opt_str(raw.get("target")),
         selector=_opt_str(raw.get("selector")),
@@ -692,14 +818,14 @@ def _requirement(raw: dict[str, Any]) -> Requirement:
     )
 
 
-def _log_source(raw: dict[str, Any]) -> LogSource:
+def _log_source(raw: dict[str, Any], where: str) -> LogSource:
     return LogSource(
         selector=_opt_str(raw.get("selector")),
         target=_opt_str(raw.get("target")),
         container=_opt_str(raw.get("container")),
-        tail=int(raw.get("tail", 2000)),
-        forbid=parse_signatures(raw.get("forbid"), "logs.forbid"),
-        allow=parse_allow(raw.get("allow"), "logs.allow"),
+        tail=_number(int, raw.get("tail", 2000), f"{where}.tail"),
+        forbid=parse_signatures(raw.get("forbid"), f"{where}.forbid"),
+        allow=parse_allow(raw.get("allow"), f"{where}.allow"),
     )
 
 
@@ -753,118 +879,142 @@ def _contract_surfaces(value: Any, where: str) -> bool | tuple[str, ...]:
 
 def _capabilities(raw: dict[str, Any], where: str = "capabilities") -> Capabilities:
     return Capabilities(
-        prefix_stability=_surface_capability(
-            raw.get("prefix_stability"), f"{where}.prefix_stability"
-        ),
-        count_tokens=parse.flag(raw.get("count_tokens"), False, f"{where}.count_tokens"),
-        anthropic_betas=parse.strings(raw.get("anthropic_betas", ()), f"{where}.anthropic_betas"),
-        messages_checks=_declared_values(
-            raw.get("messages_checks", ()), MESSAGES_CHECKS, f"{where}.messages_checks"
-        ),
-        background_responses=parse.flag(
-            raw.get("background_responses"), False, f"{where}.background_responses"
-        ),
-        stateful_responses=parse.flag(
-            raw.get("stateful_responses"), False, f"{where}.stateful_responses"
-        ),
-        stateless_responses=_stateless_responses(raw, where),
-        model_info=_model_info(raw.get("model_info") or {}, f"{where}.model_info"),
-        model_retrieval=(
-            None
-            if raw.get("model_retrieval") is None
-            else parse.flag(raw.get("model_retrieval"), False, f"{where}.model_retrieval")
-        ),
-        responses_compact=(
-            None
-            if raw.get("responses_compact") is None
-            else parse.flag(raw.get("responses_compact"), False, f"{where}.responses_compact")
-        ),
-        responses_input_tokens=(
-            None
-            if raw.get("responses_input_tokens") is None
-            else parse.flag(
-                raw.get("responses_input_tokens"), False, f"{where}.responses_input_tokens"
-            )
-        ),
-        responses_features=_responses_features(
-            raw.get("responses_features", {}), f"{where}.responses_features"
-        ),
-        structured_output=_surface_capability(
-            raw.get("structured_output"), f"{where}.structured_output"
-        ),
-        reasoning_tokens=_surface_capability(
-            raw.get("reasoning_tokens"), f"{where}.reasoning_tokens"
-        ),
-        vllm_options=parse.strings(raw.get("vllm_options", ()), f"{where}.vllm_options"),
-        messages_thinking=_declared_values(
-            raw.get("messages_thinking", ()), MESSAGES_THINKING_MODES, f"{where}.messages_thinking"
-        ),
-        messages_efforts=_declared_values(
-            raw.get("messages_efforts", ()), MESSAGES_EFFORTS, f"{where}.messages_efforts"
-        ),
-        chat_reasoning_efforts=_declared_values(
-            raw.get("chat_reasoning_efforts", ()),
-            CHAT_REASONING_EFFORTS,
-            f"{where}.chat_reasoning_efforts",
-        ),
-        responses_options=_declared_values(
-            raw.get("responses_options", ()), RESPONSES_OPTIONS, f"{where}.responses_options"
-        ),
-        responses_reasoning_efforts=_declared_values(
-            raw.get("responses_reasoning_efforts", ()),
-            RESPONSES_REASONING_EFFORTS,
-            f"{where}.responses_reasoning_efforts",
-        ),
-        chat_options=_declared_values(
-            raw.get("chat_options", ()), CHAT_OPTIONS, f"{where}.chat_options"
-        ),
-        chat_fields=_field_dispositions(
-            raw.get("chat_fields", {}), CHAT_FIELDS, f"{where}.chat_fields"
-        ),
-        completions_fields=_field_dispositions(
-            raw.get("completions_fields", {}), COMPLETIONS_FIELDS, f"{where}.completions_fields"
-        ),
-        chat_repeats=_declared_values(
-            raw.get("chat_repeats", ()), CHAT_REPEATS, f"{where}.chat_repeats"
-        ),
-        openai_contract=_contract_surfaces(raw.get("openai_contract"), f"{where}.openai_contract"),
-        structured_output_streaming=_surface_capability(
-            raw.get("structured_output_streaming"), f"{where}.structured_output_streaming"
-        ),
-        json_object=_surface_capability(raw.get("json_object"), f"{where}.json_object"),
-        vision=_surface_capability(raw.get("vision"), f"{where}.vision"),
-        image_url_fixture=_https_url(raw.get("image_url_fixture"), f"{where}.image_url_fixture"),
-        cache_reuse=_cache_reuse(raw.get("cache_reuse"), f"{where}.cache_reuse"),
-        effort_rendering=_effort_rendering(
-            raw.get("effort_rendering"), f"{where}.effort_rendering"
-        ),
-        client_reuse=parse.flag(raw.get("client_reuse"), False, f"{where}.client_reuse"),
-        client_sessions=_declared_values(
-            raw.get("client_sessions", ()), CLIENT_SESSIONS, f"{where}.client_sessions"
-        ),
-        header_probe=parse.flag(raw.get("header_probe"), False, f"{where}.header_probe"),
-        header_rewrites=_header_rewrites(
-            raw.get("header_rewrites", {}), f"{where}.header_rewrites"
-        ),
-        scenario_checks=_declared_values(
-            raw.get("scenario_checks", ()), SCENARIO_CHECKS, f"{where}.scenario_checks"
-        ),
-        client_model_names=_model_names(
-            raw.get("client_model_names", ()), f"{where}.client_model_names"
-        ),
-        chat_quiet_efforts=_quiet_efforts(raw, where),
-        forward_compat=evolution.forward_compat(
-            raw.get("forward_compat"), f"{where}.forward_compat"
-        ),
-        byte_fidelity=evolution.byte_fidelity(raw.get("byte_fidelity"), f"{where}.byte_fidelity"),
-        prompt_pins=evolution.prompt_pins(raw.get("prompt_pins"), f"{where}.prompt_pins"),
-        contract_baseline=evolution.contract_baseline(
-            raw.get("contract_baseline"), f"{where}.contract_baseline"
-        ),
-        render_pins=evolution.render_pins(raw.get("render_pins"), f"{where}.render_pins"),
-        messages_features=_messages_features(
-            raw.get("messages_features", {}), f"{where}.messages_features"
-        ),
+        **_each(
+            prefix_stability=lambda: _surface_capability(
+                raw.get("prefix_stability"), f"{where}.prefix_stability"
+            ),
+            count_tokens=lambda: parse.flag(
+                raw.get("count_tokens"), False, f"{where}.count_tokens"
+            ),
+            anthropic_betas=lambda: parse.strings(
+                raw.get("anthropic_betas", ()), f"{where}.anthropic_betas"
+            ),
+            messages_checks=lambda: _declared_values(
+                raw.get("messages_checks", ()), MESSAGES_CHECKS, f"{where}.messages_checks"
+            ),
+            background_responses=lambda: parse.flag(
+                raw.get("background_responses"), False, f"{where}.background_responses"
+            ),
+            stateful_responses=lambda: parse.flag(
+                raw.get("stateful_responses"), False, f"{where}.stateful_responses"
+            ),
+            stateless_responses=lambda: _stateless_responses(raw, where),
+            model_info=lambda: _model_info(raw.get("model_info") or {}, f"{where}.model_info"),
+            model_retrieval=lambda: (
+                None
+                if raw.get("model_retrieval") is None
+                else parse.flag(raw.get("model_retrieval"), False, f"{where}.model_retrieval")
+            ),
+            responses_compact=lambda: (
+                None
+                if raw.get("responses_compact") is None
+                else parse.flag(raw.get("responses_compact"), False, f"{where}.responses_compact")
+            ),
+            responses_input_tokens=lambda: (
+                None
+                if raw.get("responses_input_tokens") is None
+                else parse.flag(
+                    raw.get("responses_input_tokens"), False, f"{where}.responses_input_tokens"
+                )
+            ),
+            responses_features=lambda: _responses_features(
+                raw.get("responses_features", {}), f"{where}.responses_features"
+            ),
+            structured_output=lambda: _surface_capability(
+                raw.get("structured_output"), f"{where}.structured_output"
+            ),
+            reasoning_tokens=lambda: _surface_capability(
+                raw.get("reasoning_tokens"), f"{where}.reasoning_tokens"
+            ),
+            vllm_options=lambda: parse.strings(
+                raw.get("vllm_options", ()), f"{where}.vllm_options"
+            ),
+            messages_thinking=lambda: _declared_values(
+                raw.get("messages_thinking", ()),
+                MESSAGES_THINKING_MODES,
+                f"{where}.messages_thinking",
+            ),
+            messages_efforts=lambda: _declared_values(
+                raw.get("messages_efforts", ()), MESSAGES_EFFORTS, f"{where}.messages_efforts"
+            ),
+            chat_reasoning_efforts=lambda: _declared_values(
+                raw.get("chat_reasoning_efforts", ()),
+                CHAT_REASONING_EFFORTS,
+                f"{where}.chat_reasoning_efforts",
+            ),
+            responses_options=lambda: _declared_values(
+                raw.get("responses_options", ()), RESPONSES_OPTIONS, f"{where}.responses_options"
+            ),
+            responses_reasoning_efforts=lambda: _declared_values(
+                raw.get("responses_reasoning_efforts", ()),
+                RESPONSES_REASONING_EFFORTS,
+                f"{where}.responses_reasoning_efforts",
+            ),
+            chat_options=lambda: _declared_values(
+                raw.get("chat_options", ()), CHAT_OPTIONS, f"{where}.chat_options"
+            ),
+            chat_fields=lambda: _field_dispositions(
+                raw.get("chat_fields", {}), CHAT_FIELDS, f"{where}.chat_fields"
+            ),
+            completions_fields=lambda: _field_dispositions(
+                raw.get("completions_fields", {}), COMPLETIONS_FIELDS, f"{where}.completions_fields"
+            ),
+            chat_repeats=lambda: _declared_values(
+                raw.get("chat_repeats", ()), CHAT_REPEATS, f"{where}.chat_repeats"
+            ),
+            openai_contract=lambda: _contract_surfaces(
+                raw.get("openai_contract"), f"{where}.openai_contract"
+            ),
+            structured_output_streaming=lambda: _surface_capability(
+                raw.get("structured_output_streaming"), f"{where}.structured_output_streaming"
+            ),
+            json_object=lambda: _surface_capability(raw.get("json_object"), f"{where}.json_object"),
+            vision=lambda: _surface_capability(raw.get("vision"), f"{where}.vision"),
+            image_url_fixture=lambda: _https_url(
+                raw.get("image_url_fixture"), f"{where}.image_url_fixture"
+            ),
+            cache_reuse=lambda: _cache_reuse(raw.get("cache_reuse"), f"{where}.cache_reuse"),
+            effort_rendering=lambda: _effort_rendering(
+                raw.get("effort_rendering"), f"{where}.effort_rendering"
+            ),
+            client_reuse=lambda: parse.flag(
+                raw.get("client_reuse"), False, f"{where}.client_reuse"
+            ),
+            client_sessions=lambda: _declared_values(
+                raw.get("client_sessions", ()), CLIENT_SESSIONS, f"{where}.client_sessions"
+            ),
+            header_probe=lambda: parse.flag(
+                raw.get("header_probe"), False, f"{where}.header_probe"
+            ),
+            header_rewrites=lambda: _header_rewrites(
+                raw.get("header_rewrites", {}), f"{where}.header_rewrites"
+            ),
+            scenario_checks=lambda: _declared_values(
+                raw.get("scenario_checks", ()), SCENARIO_CHECKS, f"{where}.scenario_checks"
+            ),
+            client_model_names=lambda: _model_names(
+                raw.get("client_model_names", ()), f"{where}.client_model_names"
+            ),
+            chat_quiet_efforts=lambda: _quiet_efforts(raw, where),
+            forward_compat=lambda: evolution.forward_compat(
+                raw.get("forward_compat"), f"{where}.forward_compat"
+            ),
+            byte_fidelity=lambda: evolution.byte_fidelity(
+                raw.get("byte_fidelity"), f"{where}.byte_fidelity"
+            ),
+            prompt_pins=lambda: evolution.prompt_pins(
+                raw.get("prompt_pins"), f"{where}.prompt_pins"
+            ),
+            contract_baseline=lambda: evolution.contract_baseline(
+                raw.get("contract_baseline"), f"{where}.contract_baseline"
+            ),
+            render_pins=lambda: evolution.render_pins(
+                raw.get("render_pins"), f"{where}.render_pins"
+            ),
+            messages_features=lambda: _messages_features(
+                raw.get("messages_features", {}), f"{where}.messages_features"
+            ),
+        )
     )
 
 
@@ -933,25 +1083,23 @@ def _headers(raw: dict[str, Any]) -> dict[str, dict[str, Disposition]]:
     return out
 
 
-def _client(raw: dict[str, Any], base_dir: Path) -> Client:
+def _client(raw: dict[str, Any], where: str, base_dir: Path) -> Client:
+    client_id = str(raw.get("id") or "")
+    at = f"{where}({client_id})"
     return Client(
-        id=str(raw.get("id") or ""),
-        surfaces=_optional_strings(raw.get("surfaces"), f"clients({raw.get('id')}).surfaces"),
-        needs=_optional_strings(raw.get("needs"), f"clients({raw.get('id')}).needs"),
-        binaries=_binaries(raw.get("binaries", []), f"clients({raw.get('id')}).binaries", base_dir),
+        id=client_id,
+        surfaces=_optional_strings(raw.get("surfaces"), f"{at}.surfaces"),
+        needs=_optional_strings(raw.get("needs"), f"{at}.needs"),
+        binaries=_binaries(raw.get("binaries", []), f"{at}.binaries", base_dir),
     )
-
-
-def _as_list(value: Any) -> list[Any]:
-    return list(value) if isinstance(value, (list, tuple)) else [value]
 
 
 def _opt_str(value: Any) -> str | None:
     return str(value) if value not in (None, "") else None
 
 
-def _opt_int(value: Any) -> int | None:
-    return int(value) if value not in (None, "") else None
+def _opt_int(value: Any, where: str) -> int | None:
+    return _number(int, value, where) if value not in (None, "") else None
 
 
 def _opt_positive_int(value: Any, where: str) -> int | None:
@@ -1015,7 +1163,7 @@ def _effort_rendering(raw: Any, where: str) -> EffortRendering | None:
     ):
         problems.append(f"{where}.surfaces: select distinct names from {', '.join(EFFORT_VALUES)}")
     if problems:
-        raise ProfileError("\n".join(problems))
+        raise ProfileError(*problems)
     return EffortRendering(pattern=pattern, efforts=markers, surfaces=tuple(selected))
 
 
@@ -1149,7 +1297,7 @@ def _cache_reuse(raw: Any, where: str) -> CacheReuse | None:
             "as messages:enabled:2048"
         )
     if problems:
-        raise ProfileError("\n".join(problems))
+        raise ProfileError(*problems)
     return CacheReuse(
         min_ratio=float(ratio),
         surfaces=tuple(selected),
