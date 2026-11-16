@@ -14,8 +14,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, is_dataclass
+from dataclasses import fields as dataclass_fields
 from types import NoneType
 from typing import Any, get_args, get_type_hints
+
+from . import parse
+from .errors import Diagnostic, ProfileError
 
 # What a configuration rule checks. Each is one llmdv case, and each declared rule a variant.
 CONFIG_CHECKS = (
@@ -31,7 +35,7 @@ CONFIG_CHECKS = (
 CONFIG_VIEWS = ("containers", "data")
 
 
-class FleetDeclarationError(ValueError):
+class FleetDeclarationError(ProfileError):
     """A fleet declaration that cannot be turned into a rule."""
 
 
@@ -102,7 +106,7 @@ def parse_signatures(raw: Any, where: str) -> tuple[Signature, ...]:
     out = []
     for index, item in enumerate(raw):
         at = f"{where}[{index}]"
-        item = _mapping(item, at)
+        item = parse.mapping(item, at)
         _known(item, {"id", "pattern"}, at)
         pattern = _str(item.get("pattern"), f"{at}.pattern", required=True) or ""
         try:
@@ -180,12 +184,6 @@ class FleetChecks:
 # --------------------------------------------------------------------- parsing
 
 
-def _mapping(raw: Any, where: str) -> dict[str, Any]:
-    if not isinstance(raw, dict):
-        raise FleetDeclarationError(f"{where}: expected a mapping, got {raw!r}")
-    return raw
-
-
 def _known(raw: dict[str, Any], allowed: set[str], where: str) -> None:
     unknown = sorted(set(raw) - allowed)
     if unknown:
@@ -197,9 +195,7 @@ def _str(value: Any, where: str, required: bool = False) -> str | None:
         if required:
             raise FleetDeclarationError(f"{where}: required")
         return None
-    if not isinstance(value, str) or not value:
-        raise FleetDeclarationError(f"{where}: expected a non-empty string, got {value!r}")
-    return value
+    return parse.string(value, where, non_empty=True)
 
 
 def _strs(value: Any, where: str) -> tuple[str, ...]:
@@ -227,7 +223,7 @@ def _path(value: Any, where: str) -> tuple[str, ...]:
 
 
 def _objects(raw: Any, where: str) -> ObjectRef:
-    raw = _mapping(raw, where)
+    raw = parse.mapping(raw, where)
     _known(raw, {"kind", "name", "selector", "namespace"}, where)
     ref = ObjectRef(
         kind=_str(raw.get("kind"), f"{where}.kind", required=True) or "",
@@ -254,7 +250,7 @@ def _view(raw: dict[str, Any], where: str) -> str:
 
 
 def _extraction(raw: Any, where: str) -> Extraction:
-    raw = _mapping(raw, where)
+    raw = parse.mapping(raw, where)
     _known(raw, {"objects", "pattern", "view", "containers", "default"}, where)
     pattern = _str(raw.get("pattern"), f"{where}.pattern", required=True) or ""
     try:
@@ -284,7 +280,7 @@ _COMMON = {"id", "check", "when", "ingress"}
 
 
 def _config_rule(raw: Any, where: str) -> ConfigRule:
-    raw = _mapping(raw, where)
+    raw = parse.mapping(raw, where)
     rule_id = _str(raw.get("id"), f"{where}.id", required=True) or ""
     where = f"{where}({rule_id})"
     check = raw.get("check")
@@ -374,14 +370,6 @@ def _number(value: Any, where: str) -> float | None:
     return float(value)
 
 
-def _flag(value: Any, default: bool, where: str) -> bool:
-    if value is None:
-        return default
-    if not isinstance(value, bool):
-        raise FleetDeclarationError(f"{where}: expected true or false, got {value!r}")
-    return value
-
-
 _METRIC_FIELDS = {
     "bounds": {"query", "min", "max", "absent_is_zero"},
     "agree": {"left", "right", "absolute_tolerance", "relative_tolerance", "relation"},
@@ -391,7 +379,7 @@ _METRIC_FIELDS = {
 
 
 def _metric_rule(raw: Any, where: str) -> MetricRule:
-    raw = _mapping(raw, where)
+    raw = parse.mapping(raw, where)
     rule_id = _str(raw.get("id"), f"{where}.id", required=True) or ""
     where = f"{where}({rule_id})"
     check = raw.get("check")
@@ -415,7 +403,7 @@ def _metric_rule(raw: Any, where: str) -> MetricRule:
             query=_str(raw.get("query"), f"{where}.query", required=True),
             min=low,
             max=high,
-            absent_is_zero=_flag(raw.get("absent_is_zero"), False, f"{where}.absent_is_zero"),
+            absent_is_zero=parse.flag(raw.get("absent_is_zero"), False, f"{where}.absent_is_zero"),
         )
     if check == "agree":
         absolute = _number(raw.get("absolute_tolerance"), f"{where}.absolute_tolerance")
@@ -453,7 +441,7 @@ def _metric_rule(raw: Any, where: str) -> MetricRule:
             min_ratio=ratio,
             min_series=least,
         )
-    headers = _mapping(raw.get("headers") or {}, f"{where}.headers")
+    headers = parse.mapping(raw.get("headers") or {}, f"{where}.headers")
     if not all(isinstance(k, str) and isinstance(v, str) for k, v in headers.items()):
         raise FleetDeclarationError(f"{where}.headers: expected string names and values")
     query = _str(raw.get("query"), f"{where}.query", required=True) or ""
@@ -487,12 +475,12 @@ def parse_metrics_source(raw: Any) -> MetricsSource | None:
     if raw is None:
         return None
     where = "environment.metrics"
-    raw = _mapping(raw, where)
+    raw = parse.mapping(raw, where)
     _known(raw, {"url", "auth", "proxy", "timeout", "tls_verify"}, where)
     url = _str(raw.get("url"), f"{where}.url", required=True) or ""
     if not url.startswith(("http://", "https://")):
         raise FleetDeclarationError(f"{where}.url: must start with http:// or https://")
-    auth = _mapping(raw.get("auth") or {}, f"{where}.auth")
+    auth = parse.mapping(raw.get("auth") or {}, f"{where}.auth")
     _known(auth, {"type", "key_env"}, f"{where}.auth")
     kind = auth.get("type", "none")
     if kind not in ("none", "bearer"):
@@ -512,7 +500,7 @@ def parse_metrics_source(raw: Any) -> MetricsSource | None:
         key_env=key_env if kind == "bearer" else None,
         proxy=proxy,
         timeout=15.0 if timeout is None else timeout,
-        tls_verify=_flag(raw.get("tls_verify"), True, f"{where}.tls_verify"),
+        tls_verify=parse.flag(raw.get("tls_verify"), True, f"{where}.tls_verify"),
     )
 
 
@@ -533,7 +521,7 @@ def parse_fleet(raw: Any) -> FleetChecks:
     """The `fleet` block, or empty checks when the profile has none."""
     if raw is None:
         return FleetChecks()
-    raw = _mapping(raw, "fleet")
+    raw = parse.mapping(raw, "fleet")
     _known(raw, {"config", "metrics"}, "fleet")
     return FleetChecks(
         config=_rules(raw, "config", _config_rule),
@@ -541,15 +529,14 @@ def parse_fleet(raw: Any) -> FleetChecks:
     )
 
 
-def fleet_diagnostics(profile: Any) -> list[tuple[str, str, str]]:
-    """Cross-section checks on the fleet block, as (level, path, message) triples.
+def fleet_diagnostics(profile: Any) -> list[Diagnostic]:
+    """Cross-section checks on the fleet block.
 
     Offline like the rest of `validate`: names are checked against the profile, never against a
     cluster.
     """
-    from dataclasses import fields as dataclass_fields
-
-    from .schema import Capabilities
+    # Read from the profile rather than imported: `schema` imports this module.
+    Capabilities = type(profile.capabilities)
 
     def capability_path_known(path: str) -> bool:
         current: type = Capabilities
@@ -565,31 +552,37 @@ def fleet_diagnostics(profile: Any) -> list[tuple[str, str, str]]:
                 current = next_type
         return True
 
-    out: list[tuple[str, str, str]] = []
+    out: list[Diagnostic] = []
     capabilities = {item.name for item in dataclass_fields(Capabilities)}
     ingress_ids = set(profile.ingress_ids)
     namespace = profile.environment.namespace
     if profile.fleet.metrics and profile.environment.metrics is None:
-        out.append(("error", "fleet.metrics", "declares rules but environment.metrics is unset"))
+        out.append(
+            Diagnostic("error", "fleet.metrics", "declares rules but environment.metrics is unset")
+        )
     for rule in profile.fleet.metrics:
         at = f"fleet.metrics({rule.id})"
         if rule.ingress and rule.ingress not in ingress_ids:
-            out.append(("error", f"{at}.ingress", f"names undeclared ingress {rule.ingress!r}"))
+            out.append(
+                Diagnostic("error", f"{at}.ingress", f"names undeclared ingress {rule.ingress!r}")
+            )
         if rule.when and rule.when not in capabilities:
-            out.append(("error", f"{at}.when", f"unknown capability {rule.when!r}"))
+            out.append(Diagnostic("error", f"{at}.when", f"unknown capability {rule.when!r}"))
     for rule in profile.fleet.config:
         at = f"fleet.config({rule.id})"
         gated_out = bool(rule.when) and not any(
             getattr(ingress.capabilities, rule.when, None) for ingress in profile.ingresses
         )
         if rule.ingress and rule.ingress not in ingress_ids:
-            out.append(("error", f"{at}.ingress", f"names undeclared ingress {rule.ingress!r}"))
+            out.append(
+                Diagnostic("error", f"{at}.ingress", f"names undeclared ingress {rule.ingress!r}")
+            )
         if rule.when and rule.when not in capabilities:
-            out.append(("error", f"{at}.when", f"unknown capability {rule.when!r}"))
+            out.append(Diagnostic("error", f"{at}.when", f"unknown capability {rule.when!r}"))
         if rule.expect_capability:
             if not capability_path_known(rule.expect_capability):
                 out.append(
-                    (
+                    Diagnostic(
                         "error",
                         f"{at}.expect_capability",
                         f"unknown capability {rule.expect_capability!r}",
@@ -600,7 +593,7 @@ def fleet_diagnostics(profile: Any) -> list[tuple[str, str, str]]:
                 for ingress in profile.ingresses
             ):
                 out.append(
-                    (
+                    Diagnostic(
                         "error",
                         f"{at}.expect_capability",
                         f"capability {rule.expect_capability!r} is not declared by any ingress",
@@ -608,7 +601,11 @@ def fleet_diagnostics(profile: Any) -> list[tuple[str, str, str]]:
                 )
         refs = [rule.objects] if rule.objects else [source.objects for source in rule.sources]
         if not namespace and any(ref is not None and not ref.namespace for ref in refs):
-            out.append(("error", at, "reads objects with no namespace; set environment.namespace"))
+            out.append(
+                Diagnostic(
+                    "error", at, "reads objects with no namespace; set environment.namespace"
+                )
+            )
     return out
 
 
