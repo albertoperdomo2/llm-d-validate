@@ -440,7 +440,8 @@ def _check_access(report: Report, ingress: Ingress) -> None:
         Problem(
             ingress.id,
             "access",
-            f"{model!r} is not among the models this key can use here "
+            f"profile and deployment disagree: profile model.public_id declares {model!r}, "
+            "but it is not among the models this key can use here "
             f"({shown or 'none listed'}{more})",
             remedy="check the profile's model id, or ask the gateway owners to grant it to "
             "this key",
@@ -501,7 +502,13 @@ def _check_declared_apis(report: Report, ingress: Ingress) -> None:
                 if exchange.transport_error
                 else f"HTTP {exchange.status}"
             )
-            if exchange.transport_error or exchange.status is None:
+            inconclusive = (
+                exchange.transport_error
+                or exchange.status is None
+                or exchange.status == 429
+                or 500 <= exchange.status < 600
+            )
+            if inconclusive:
                 report.warnings.append(
                     Problem(
                         ingress.id,

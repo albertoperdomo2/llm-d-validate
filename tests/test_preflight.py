@@ -118,6 +118,7 @@ def test_a_model_the_key_cannot_use_is_an_access_problem(tmp_path):
     assert not report.ok
     assert [problem.kind for problem in report.problems] == ["access"]
     message = report.problems[0].message
+    assert "profile and deployment disagree" in message
     assert repr(MODEL) in message and "fake/Other-7B" in message
 
 
@@ -149,6 +150,14 @@ def test_a_declared_api_that_does_not_answer_stops_preflight(tmp_path):
     assert "ingresses[one].surfaces" in problem.message
     assert "chat_completions" in problem.message
     assert "HTTP 404" in problem.message
+
+
+def test_a_throttled_declared_api_probe_is_only_a_warning(tmp_path):
+    with FakeFleet(throttle=True) as fleet:
+        report = preflight.run(build(tmp_path, fleet.base_url))
+    assert report.ok
+    assert not report.problems
+    assert any("HTTP 429" in warning.message for warning in report.warnings)
 
 
 @pytest.mark.parametrize("defect", ["absent", "forbidden"])
