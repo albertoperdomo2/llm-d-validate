@@ -238,7 +238,7 @@ def archive(root, profile, runs):
         d.mkdir(parents=True)
         (d / "results.jsonl").write_text("\n".join(json.dumps(r) for r in records))
         # compare only takes a nightly run as its baseline.
-        (d / "outcome.json").write_text(json.dumps({"labels": {"trigger": "nightly"}}))
+        (d / "outcome.json").write_text(json.dumps({"identity": {"trigger": "nightly"}}))
         manifest.write(d)
     return f"file://{root}"
 
@@ -248,6 +248,7 @@ def test_compare_writes_its_verdicts_as_data_beside_the_report(tmp_path):
     d = tmp_path / "run" / "2026-01-02T00Z"
     d.mkdir(parents=True)
     (d / "results.jsonl").write_text(json.dumps(router("a", "fail", run_id=d.name)) + "\n")
+    (d / "outcome.json").write_text(json.dumps({"identity": {"trigger": "nightly"}}))
 
     compare_run(d, uri, "p")
     record = json.loads((d / COMPARISON_JSON).read_text())

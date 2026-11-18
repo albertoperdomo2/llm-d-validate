@@ -23,3 +23,5 @@
 #   the engine ingress          as for vLLM (engines/vllm.yaml). llmdv has no SGLang kind; a
 #                               per-replica SGLang layer would be `kind: vllm` until one exists,
 #                               which is wrong for SGLang's error envelopes and metric names
+
+engine: sglang

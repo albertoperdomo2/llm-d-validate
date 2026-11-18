@@ -106,7 +106,7 @@ def add_parser(subparsers, parents) -> None:
         action="append",
         default=[],
         metavar="KEY=VALUE",
-        help="declare a lane identity dimension (accelerator, provider, llm_d_ref or trigger)",
+        help="declare a lane identity dimension or profile assertion (repeatable key=value)",
     )
     verify.add_argument(
         "--transcript-cap",

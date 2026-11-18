@@ -163,18 +163,21 @@ def _compare_run(
             local.read_text(encoding="utf-8") if local.is_file() else None,
         )
 
-    # The finishing run's stack from its own outcome, or from its exchanges when the outcome
-    # was written by a llmdv that did not record one.
-    local_stack = (outcome.read(run_dir) or {}).get("stack") or stack_from_run(run_dir)
-    attach_stack(delta, read_stack(source, profile, before_id), local_stack)
-
-    after_id = _run_id(after)
+    # Configuration-compatible runs may still differ in provenance or the profile itself.
+    # Keep those differences visible in standalone comparisons as well as job comparisons.
     before_identity = read_identity(source, profile, before_id)
     notes = [
         f"identity {item}"
         for item in differences(before_identity, current_identity)
         if item.split(":", 1)[0] not in CONFIGURATION_DIMENSIONS
     ]
+
+    # The finishing run's stack from its own outcome, or from its exchanges when the outcome
+    # was written by a llmdv that did not record one.
+    local_stack = (outcome.read(run_dir) or {}).get("stack") or stack_from_run(run_dir)
+    attach_stack(delta, read_stack(source, profile, before_id), local_stack)
+
+    after_id = _run_id(after)
     text = render(delta, profile, before_id, after_id or run_dir.name)
     if notes:
         text += "\nNotes:\n" + "\n".join(f"  • {note}" for note in notes)

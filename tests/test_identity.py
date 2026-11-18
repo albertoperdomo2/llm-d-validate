@@ -1,6 +1,6 @@
 import pytest
 
-from llmdv.identity import IdentityError, build, differences, parse
+from llmdv.identity import IdentityError, build, differences, parse, validate_lane
 
 
 def test_lane_identity_defaults_to_manual_and_accepts_the_ref_alias():
@@ -12,8 +12,21 @@ def test_lane_identity_defaults_to_manual_and_accepts_the_ref_alias():
 
 
 def test_unknown_identity_dimensions_are_usage_errors():
-    with pytest.raises(IdentityError, match="accelerator"):
-        parse(["engine=vllm"])
+    with pytest.raises(IdentityError, match="llmdv_version"):
+        parse(["llmdv_version=old"])
+
+
+def test_profile_dimensions_are_accepted_as_assertions():
+    assert parse(["model=model-a", "engine=vllm"]) == {
+        "model": "model-a",
+        "engine": "vllm",
+        "trigger": "manual",
+    }
+
+
+def test_profile_assertion_mismatch_is_a_usage_error():
+    with pytest.raises(IdentityError, match="model"):
+        validate_lane({"model": "wrong"}, {"model": "model-a"})
 
 
 def test_identity_has_fixed_dimensions_and_reports_non_configuration_notes():

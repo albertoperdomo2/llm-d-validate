@@ -45,14 +45,6 @@ compare.
 
 ## How a request reaches the fleet
 
-## Run identity
-
-Each run records one fixed identity in `outcome.json`, `alerts.json` and `comparison.json`.
-Guide, engine, gateway and model come from the profile; accelerator, provider, `llm_d_ref` and
-trigger come from `--identity`; llmdv records its version and the profile digest. Automatic
-comparisons require matching configuration dimensions, so different overlays cannot become one
-another's baselines.
-
 Two channels, deliberately separate. The **data plane** is the thing under test: ordinary HTTP to
 whatever address the profile declares. The **control plane** only makes the data plane legible:
 resolving a selector to a pod that exists now, and pulling logs for the run window.
@@ -89,6 +81,14 @@ Preflight also sends one authenticated `GET /v1/models` per reachable ingress, s
 are exempt from auth. A 401 is a `credentials` problem and a list that omits the profile's
 `public_id` is an `access` problem, both exit 3 before any case runs; a 403, a 404 or an
 unreadable list is only a warning, because the check could not decide.
+
+## Run identity
+
+Each run records one fixed identity in `outcome.json`, `alerts.json` and `comparison.json`.
+Guide, engine, gateway and model come from the profile; accelerator, provider, `llm_d_ref` and
+trigger come from `--identity`; llmdv records its version and the profile digest. Automatic
+comparisons require matching configuration dimensions, so different overlays cannot become one
+another's baselines.
 
 ## A run, end to end
 

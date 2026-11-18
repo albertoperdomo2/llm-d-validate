@@ -6,7 +6,7 @@
 #              [-- llmdv verify arguments...]
 #
 # The Job is the CronJob's job template with only its arguments replaced: those after `--`,
-# preceded by `--label trigger=<trigger> --label <trigger>=<id>`. Prints the Job's name; wait on
+# preceded by `--identity trigger=<trigger> --label <trigger>=<id>`. Prints the Job's name; wait on
 # it with the caller's own tooling. Deciding the rollout is ready is the caller's job too.
 #
 # Needs kubectl permissions: get cronjobs, create jobs and configmaps (the llmdv-trigger Role).
@@ -63,7 +63,7 @@ fi
 json_string() {
     printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"
 }
-args="$(json_string --label),$(json_string "trigger=$trigger")"
+args="$(json_string --identity),$(json_string "trigger=$trigger")"
 args="$args,$(json_string --label),$(json_string "$trigger=$id")"
 for arg in "$@"; do
     args="$args,$(json_string "$arg")"

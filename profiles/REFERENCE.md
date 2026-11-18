@@ -20,6 +20,8 @@ Conventions:
 | `schema` | string | `llmdv.profile/1` | Schema version. Any other value is an error. |
 | `name` | string | the file name, without `.yaml` | Profile name, shown in output and `results.jsonl`. Never inherited through [`extends`](#extends). |
 | `guide` | string | none | Guide identifier recorded in run identity; it is safe deployment metadata, not a cluster address. |
+| `engine` | string | none | Engine implementation identifier recorded in run identity. |
+| `gateway` | string | none | Gateway implementation identifier recorded in run identity. |
 | `vantage` | `external` \| `in-cluster` | `external` | Where the client ran, relative to the cluster. `external` covers a laptop, a CI runner or a jump host; what drove the run goes in `--label`. `laptop` is read as `external`. |
 | `environment` | mapping | none | Cluster coordinates for read-only lookups. See [environment](#environment). |
 | `model` | mapping | **required** | The model the fleet serves. See [model](#model). |
@@ -107,8 +109,6 @@ One entry per addressable layer. One ingress is a complete profile; each further
 | --- | --- | --- | --- |
 | `id` | string | **required** | Short, unique name: letters, digits, `.`, `_` and `-`, starting with a letter or a digit. It becomes the pytest parameter id, so `-k <id>` selects one column. |
 | `kind` | `vllm` \| `llmd_router` \| `litellm` | `vllm` | Selects the adapter. In reports it also orders the layers outermost first: `litellm`, `llmd_router`, `vllm`. Two ingresses of one kind are peers: reports never compare them with each other. |
-| `implementation` | string | none | Safe implementation/build identifier for this layer, recorded in run identity. |
-| `role` | string | none | Optional identity role (`engine` or `gateway`) when the ingress kind does not identify the role. |
 | `base_url` | string | **required** unless `base_url_env` is set | Must start with `http://` or `https://`. |
 | `base_url_env` | string | none | Environment variable holding the URL. A committed profile uses it so no hostname enters the repository. Declaring both is an error; an unset variable fails preflight. |
 | `auth` | mapping | `{type: none}` | See [ingresses[].auth](#ingressesauth). |

@@ -36,7 +36,7 @@ To publish it, add:
 
 ```sh
 --evidence all --remote-output "s3://$AWS_BUCKET/<prefix>" \
---label trigger=on-demand --label "actor=$USER"
+--identity trigger=manual --label "actor=$USER"
 ```
 
 Use a `*.local.yaml` copy for machine-specific changes, and keep the machine awake. A multi-ingress profile runs every ingress; `--ingress <id>` (repeatable) restricts it, and `llmdv profile show <profile> --setup` prints any port-forwards it needs.
@@ -60,7 +60,7 @@ Arguments after `--` replace the CronJob's args. Use `--cli oc` for OpenShift an
 
 ## Prefixes and triggers
 
-A scheduled run, including a scheduled cluster job, is labelled `trigger=nightly`; label every other run differently (e.g. `trigger=on-demand`). Only `llmdv job --compare` restricts its baselines to `trigger=nightly` runs. A standalone `llmdv compare` compares the latest run under the prefix with the one before it, whatever its trigger, so never publish a one-off under the scheduled runs' prefix: it would become the next comparison's baseline.
+A scheduled run, including a scheduled cluster job, passes `--identity trigger=nightly`; manual runs default to `trigger=manual`. Both job and standalone compare select only matching configuration identities, including trigger.
 
 ## Pull a run back
 

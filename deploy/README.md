@@ -186,7 +186,7 @@ deploy/trigger.sh -n <namespace> --trigger manual --profile-file /secure/path/pr
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `-n` | required | the CronJob's namespace |
-| `--trigger` | `rollout` | becomes `--label trigger=<value>`, replacing the job's default `trigger=nightly` |
+| `--trigger` | `rollout` | becomes `--identity trigger=<value>` |
 | `--id` | UTC timestamp | becomes `--label <trigger>=<id>` and names the Job |
 | `--cronjob` | `llmdv` | the CronJob to copy |
 | `--cli` | `kubectl` | or `oc` |

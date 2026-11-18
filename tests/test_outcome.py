@@ -46,7 +46,8 @@ def test_a_passing_run_records_its_outcome_labels_and_one_run_id(tmp_path):
         result = run_llmdv(
             "verify", "--profile", str(profile), "--local-output", str(run_dir),
             "--pod-logs", "off", "-k", "discovery",
-            "--label", "trigger=nightly", "--label", "trigger=rollout", "--label", "rollout=r1",
+            "--identity", "trigger=nightly", "--identity", "trigger=rollout",
+            "--label", "rollout=r1",
         )  # fmt: skip
 
     assert result.returncode == 0, result.stderr
@@ -55,7 +56,8 @@ def test_a_passing_run_records_its_outcome_labels_and_one_run_id(tmp_path):
     assert outcome["verification"]["exit_code"] == 0
     assert outcome["verification"]["counts"]["pass"] >= 1
     # A later label overrides an earlier one, so a caller can replace the runner's default.
-    assert outcome["labels"] == {"trigger": "rollout", "rollout": "r1"}
+    assert outcome["identity"]["trigger"] == "rollout"
+    assert outcome["labels"] == {"rollout": "r1"}
     assert outcome["publication"] == {"status": "not_requested"}
     # The layer graph, so the alert feed can attribute without the profile.
     assert outcome["topology"] == {"order": ["fake"], "fronts": {"fake": []}}
@@ -64,6 +66,23 @@ def test_a_passing_run_records_its_outcome_labels_and_one_run_id(tmp_path):
     env = json.loads((run_dir / "env.json").read_text())
     assert {r["run_id"] for r in results} == {outcome["run_id"]} == {env["run_id"]}
     assert env["labels"] == outcome["labels"]
+
+
+def test_a_profile_identity_assertion_mismatch_exits_two(tmp_path):
+    with FakeFleet() as fleet:
+        profile = write_profile(tmp_path, fleet)
+        result = run_llmdv(
+            "verify",
+            "--profile",
+            str(profile),
+            "--local-output",
+            str(tmp_path / "run"),
+            "--identity",
+            "model=not-the-profile-model",
+            "--pod-logs",
+            "off",
+        )
+    assert result.returncode == 2
 
 
 def test_a_fleet_failure_is_recorded_with_the_failing_case(tmp_path):

@@ -15,3 +15,5 @@
 #
 # Not declared here, and why:
 #   the engine ingress          as for vLLM (engines/vllm.yaml); llmdv has no Atom kind
+
+engine: atom

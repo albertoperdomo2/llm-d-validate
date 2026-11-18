@@ -73,14 +73,14 @@ def manifests(store):
 def test_a_passing_run_is_published_and_notified_with_the_callers_selection(tmp_path):
     with FakeFleet() as fleet, FakeS3() as store, FakeSlack() as slack:
         result, outcome = run_job(
-            tmp_path, fleet, store, slack, "-k", "models_lists", "--label", "trigger=rollout"
+            tmp_path, fleet, store, slack, "-k", "models_lists", "--identity", "trigger=rollout"
         )
 
     assert result.returncode == 0, diagnose(result)
     assert outcome["verification"]["class"] == "ok"
     assert outcome["verification"]["counts"] == {"pass": 1}
-    # The caller's label overrides the job's default trigger=nightly.
-    assert outcome["labels"] == {"trigger": "rollout"}
+    # The caller's identity overrides the default manual trigger.
+    assert outcome["identity"]["trigger"] == "rollout"
     assert len(manifests(store)) == 1
     assert slack.received[0]["text"].startswith("llmdv fake: PASSED")
     # The outcome is also in the job log, the copy that outlives the pod.
@@ -423,7 +423,24 @@ def test_a_malformed_baseline_is_reported_in_publication_and_notification(
     )
     # Only a nightly run is a baseline, so label it as one; otherwise compare skips it and
     # never reaches the malformed line this test is about.
-    (baseline / "outcome.json").write_text(json.dumps({"labels": {"trigger": "nightly"}}))
+    (baseline / "outcome.json").write_text(
+        json.dumps(
+            {
+                "identity": {
+                    "guide": None,
+                    "accelerator": None,
+                    "engine": None,
+                    "provider": None,
+                    "gateway": None,
+                    "model": None,
+                    "llm_d_ref": None,
+                    "llmdv_version": None,
+                    "profile_digest": None,
+                    "trigger": "nightly",
+                }
+            }
+        )
+    )
     manifest.write(baseline)
     fallback = tmp_path / "fallback"
     with (
