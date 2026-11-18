@@ -37,6 +37,18 @@ def write_run(run: Path, rows, verification=None, run_id="r") -> Path:
         "run_id": run_id,
         "profile": {"name": "p"},
         "verification": verification or {"exit_code": None, "class": None, "counts": {}},
+        "identity": {
+            "guide": None,
+            "accelerator": None,
+            "engine": None,
+            "provider": None,
+            "gateway": None,
+            "model": None,
+            "llm_d_ref": None,
+            "llmdv_version": None,
+            "profile_digest": None,
+            "trigger": "manual",
+        },
     }
     (run / "outcome.json").write_text(json.dumps(body), encoding="utf-8")
     return run

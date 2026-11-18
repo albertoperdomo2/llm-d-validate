@@ -421,8 +421,8 @@ def test_a_malformed_baseline_is_reported_in_publication_and_notification(
         )
         + "\n"
     )
-    # Only a nightly run is a baseline, so label it as one; otherwise compare skips it and
-    # never reaches the malformed line this test is about.
+    # The baseline identity matches this job's default manual trigger, so comparison reaches
+    # the malformed line this test is about.
     (baseline / "outcome.json").write_text(
         json.dumps(
             {
@@ -432,11 +432,11 @@ def test_a_malformed_baseline_is_reported_in_publication_and_notification(
                     "engine": None,
                     "provider": None,
                     "gateway": None,
-                    "model": None,
+                    "model": "fake/Model-1B",
                     "llm_d_ref": None,
                     "llmdv_version": None,
                     "profile_digest": None,
-                    "trigger": "nightly",
+                    "trigger": "manual",
                 }
             }
         )

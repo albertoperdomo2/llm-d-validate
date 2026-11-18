@@ -75,7 +75,7 @@ def test_trigger_creates_the_cronjob_template_with_only_its_arguments_replaced(t
     job = json.loads(created.read_text())
     container = job["spec"]["template"]["spec"]["containers"][0]
     assert container["args"] == [
-        "--label", "trigger=rollout", "--label", "rollout=Release_1.2",
+        "--identity", "trigger=rollout", "--label", "rollout=Release_1.2",
         "--client", "agent", "-k", 'name with "quotes"',
     ]  # fmt: skip
     # Everything else is the CronJob's template, untouched.
@@ -186,7 +186,7 @@ def test_a_local_profile_uses_an_owned_configmap_and_the_profile_volume_by_name(
     assert "kubectl-called" not in result.stderr
     job = json.loads(job_input.read_text())
     assert job["spec"]["template"]["spec"]["containers"][0]["args"][:4] == [
-        "--label",
+        "--identity",
         "trigger=manual",
         "--label",
         "manual=operator",
@@ -229,7 +229,7 @@ def test_a_manual_trigger_keeps_the_image_and_environment(tmp_path):
     assert result.returncode == 0, result.stderr
     job = json.loads(created.read_text())
     container = job["spec"]["template"]["spec"]["containers"][0]
-    assert container["args"][:4] == ["--label", "trigger=manual", "--label", "manual=m"]
+    assert container["args"][:4] == ["--identity", "trigger=manual", "--label", "manual=m"]
     original = CRONJOB_JOB["spec"]["template"]["spec"]["containers"][0]
     assert container["image"] == original["image"]
     assert container["env"] == original["env"]

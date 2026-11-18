@@ -46,6 +46,14 @@ from .exit_codes import OK, PREFLIGHT, TEST_FAILURES, USAGE
 log = get_logger("cli.compare")
 
 
+def _identity_notes(before: dict | None, after: dict | None) -> list[str]:
+    return [
+        f"identity {item}"
+        for item in differences(before, after)
+        if item.split(":", 1)[0] not in CONFIGURATION_DIMENSIONS
+    ]
+
+
 def add_parser(subparsers, parents) -> None:
     command = subparsers.add_parser(
         "compare",
@@ -166,11 +174,7 @@ def _compare_run(
     # Configuration-compatible runs may still differ in provenance or the profile itself.
     # Keep those differences visible in standalone comparisons as well as job comparisons.
     before_identity = read_identity(source, profile, before_id)
-    notes = [
-        f"identity {item}"
-        for item in differences(before_identity, current_identity)
-        if item.split(":", 1)[0] not in CONFIGURATION_DIMENSIONS
-    ]
+    notes = _identity_notes(before_identity, current_identity)
 
     # The finishing run's stack from its own outcome, or from its exchanges when the outcome
     # was written by a llmdv that did not record one.
@@ -327,9 +331,18 @@ def run(args: argparse.Namespace) -> int:
         read_stack(args.source, args.profile, after_id),
     )
 
+    notes = _identity_notes(
+        read_identity(args.source, args.profile, before_id),
+        read_identity(args.source, args.profile, after_id),
+    )
+
     emit("")
     for line in render(delta, args.profile, before_id, after_id).splitlines():
         emit(f"  {line}")
+    if notes:
+        emit("  Notes:")
+        for note in notes:
+            emit(f"    • {note}")
     emit("")
 
     if delta.regressed and not args.no_fail:

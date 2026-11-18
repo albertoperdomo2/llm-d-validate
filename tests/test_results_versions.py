@@ -219,6 +219,24 @@ def test_the_comparison_is_the_same_and_a_window_may_mix_both(tmp_path):
         d = root / "p" / run_id
         d.mkdir(parents=True)
         write_jsonl(d / "results.jsonl", rows)
+        (d / "outcome.json").write_text(
+            json.dumps(
+                {
+                    "identity": {
+                        "guide": None,
+                        "accelerator": None,
+                        "engine": None,
+                        "provider": None,
+                        "gateway": None,
+                        "model": "m",
+                        "llm_d_ref": None,
+                        "llmdv_version": None,
+                        "profile_digest": "d1",
+                        "trigger": "manual",
+                    }
+                }
+            )
+        )
         manifest.write(d)
     uri = f"file://{root}"
 
@@ -309,6 +327,24 @@ def test_compare_refuses_an_unknown_major_naming_the_run_file(tmp_path):
         d = root / "p" / run_id
         d.mkdir(parents=True)
         write_jsonl(d / "results.jsonl", rows)
+        (d / "outcome.json").write_text(
+            json.dumps(
+                {
+                    "identity": {
+                        "guide": None,
+                        "accelerator": None,
+                        "engine": None,
+                        "provider": None,
+                        "gateway": None,
+                        "model": "m",
+                        "llm_d_ref": None,
+                        "llmdv_version": None,
+                        "profile_digest": "d1",
+                        "trigger": "manual",
+                    }
+                }
+            )
+        )
         manifest.write(d)
     uri = f"file://{root}"
     with pytest.raises(archive.InvalidRun) as raised:

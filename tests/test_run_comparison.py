@@ -364,7 +364,11 @@ def test_accelerator_lanes_compare_only_against_their_own_history(tmp_path):
     arch = tmp_path / "archive"
     uri = archive(
         arch,
-        runs={"amd-1": [rec("a", "pass")], "tpu-1": [rec("a", "fail")]},
+        runs={
+            "amd-1": [rec("a", "pass")],
+            "tpu-1": [rec("a", "fail")],
+            "amd-2": [rec("a", "pass")],
+        },
     )
     (arch / "p" / "tpu-1" / "outcome.json").write_text(
         json.dumps(
@@ -388,6 +392,36 @@ def test_accelerator_lanes_compare_only_against_their_own_history(tmp_path):
     _write_identity(current, accelerator="tpu")
     code, text = compare_run(current, uri, "p")
     assert code == 0 and "`tpu-1` → `tpu-2`" in text
+    current = _run_dir(tmp_path, [dict(rec("a", "pass"), run_id="amd-3")], name="amd-3")
+    _write_identity(current, accelerator="amd")
+    code, text = compare_run(current, uri, "p")
+    assert code == 0 and "`amd-2` → `amd-3`" in text
+
+
+def test_standalone_compare_reports_provenance_notes(tmp_path, capsys):
+    root = tmp_path / "archive"
+    uri = archive(root, runs={"r1": [rec("a", "pass")], "r2": [rec("a", "pass")]})
+    for run_id, ref in (("r1", "old"), ("r2", "new")):
+        (root / "p" / run_id / "outcome.json").write_text(
+            json.dumps(
+                {
+                    "identity": {
+                        "guide": "g",
+                        "accelerator": "amd",
+                        "engine": "vllm",
+                        "provider": "p",
+                        "gateway": None,
+                        "model": "m",
+                        "llm_d_ref": ref,
+                        "llmdv_version": "v",
+                        "profile_digest": "d",
+                        "trigger": "nightly",
+                    }
+                }
+            )
+        )
+    assert main(["compare", "--from", uri, "--profile", "p"]) == 0
+    assert "identity llm_d_ref: 'old' -> 'new'" in capsys.readouterr().out
 
 
 def test_a_window_counts_only_nightly_runs(tmp_path):
