@@ -38,9 +38,20 @@ ingresses:
 """
 
 
-def build(tmp_path, base_url, auth="{type: none}", proxy="bypass", model=MODEL):
+def build(
+    tmp_path,
+    base_url,
+    auth="{type: none}",
+    proxy="bypass",
+    model=MODEL,
+    max_model_len=None,
+):
     path = tmp_path / "pf.yaml"
-    text = TEMPLATE.format(base_url=base_url, auth=auth, proxy=proxy, model=model)
+    declared = "" if max_model_len is None else f"\n  max_model_len: {max_model_len}"
+    text = TEMPLATE.replace(
+        "model: {{public_id: {model}}}", "model:\n  public_id: {model}" + declared
+    )
+    text = text.format(base_url=base_url, auth=auth, proxy=proxy, model=model)
     path.write_text(textwrap.dedent(text))
     return loader.load(path)
 
@@ -110,11 +121,41 @@ def test_a_model_the_key_cannot_use_is_an_access_problem(tmp_path):
     assert repr(MODEL) in message and "fake/Other-7B" in message
 
 
+def test_a_context_window_mismatch_stops_preflight(tmp_path):
+    with FakeFleet(advertised_max_model_len=512) as fleet:
+        report = preflight.run(build(tmp_path, fleet.base_url, max_model_len=256))
+    assert not report.ok
+    problem = report.problems[0]
+    assert problem.kind == "access"
+    assert "model.max_model_len" in problem.message
+    assert "256" in problem.message and "512" in problem.message
+
+
+def test_an_unreported_context_window_is_only_a_warning(tmp_path):
+    with FakeFleet(advertised_max_model_len=None) as fleet:
+        report = preflight.run(build(tmp_path, fleet.base_url, max_model_len=256))
+    assert report.ok
+    assert any(
+        warning.kind == "access" and "max_model_len" in warning.message
+        for warning in report.warnings
+    )
+
+
+def test_a_declared_api_that_does_not_answer_stops_preflight(tmp_path):
+    with FakeFleet(serve_chat=False) as fleet:
+        report = preflight.run(build(tmp_path, fleet.base_url))
+    assert not report.ok
+    problem = next(problem for problem in report.problems if problem.kind == "access")
+    assert "ingresses[one].surfaces" in problem.message
+    assert "chat_completions" in problem.message
+    assert "HTTP 404" in problem.message
+
+
 @pytest.mark.parametrize("defect", ["absent", "forbidden"])
 def test_a_list_that_cannot_be_read_is_only_a_warning(tmp_path, defect):
     """No list route, or a key scoped away from listing, cannot decide; the cases still can."""
     config = FakeModelDiscoveryConfig(listing_defect=defect)
-    with FakeFleet(model="fake/Other-7B", model_discovery_config=config) as fleet:
+    with FakeFleet(model=MODEL, model_discovery_config=config) as fleet:
         report = preflight.run(build(tmp_path, fleet.base_url))
     assert report.ok, [problem.render() for problem in report.problems]
     access = [warning for warning in report.warnings if warning.kind == "access"]
