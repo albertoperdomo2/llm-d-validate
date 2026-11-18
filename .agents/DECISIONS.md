@@ -134,6 +134,17 @@ case that checked nothing. Recording before asserting means a failure shows the 
 that caused it. A failure whose recorded checks all passed is flagged, because a bundle that
 contradicts its own verdict reads as a spurious failure.
 
+## Plans expose statistical sample counts
+
+`llmdv plan` reports the resolved `n` per group for cases with a `samples` rule, including a
+profile override on the selected ingress; non-statistical cases report no count. The plan uses
+the same rule resolver as the case fixture rather than duplicating profile merge logic.
+
+*Why:* a plan is an operator's preview of the work and its cost. A repeat or ordering case that
+looks like one row may send several requests, and an ingress override changes that cost. Showing
+the resolved count makes the preview truthful while keeping the statistical rule itself owned by
+the case and its shared assertion helper.
+
 ## Local first, publish after
 
 The run directory is always written locally. Publishing to `s3://` or `file://` is a separate
