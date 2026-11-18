@@ -30,6 +30,7 @@ from llmdv.profile import loader
 from tests.fakes import SRC, FakeFleet, LocalForward, profile_yaml, run_llmdv
 
 SELECTION = ("-m", "openai_chat")
+PRECHECK_POSTS = 4  # one precheck probe per surface declared by profile_yaml
 
 
 def _profile(
@@ -79,7 +80,7 @@ def _outcome(tmp_path: Path) -> dict:
 
 
 def test_a_local_tunnel_lost_mid_run_exits_3_and_records_no_fleet_failure(tmp_path):
-    with FakeFleet(go_dark_after=3) as fleet:
+    with FakeFleet(go_dark_after=PRECHECK_POSTS + 3) as fleet:
         result = _verify(tmp_path, _profile(tmp_path, fleet))
     assert result.returncode == 3, result.stderr
 
@@ -120,7 +121,7 @@ def test_a_local_tunnel_lost_mid_run_exits_3_and_records_no_fleet_failure(tmp_pa
 
 
 def test_a_real_failure_before_the_loss_still_exits_1(tmp_path):
-    with FakeFleet(abort_finish_reason=True, go_dark_after=4) as fleet:
+    with FakeFleet(abort_finish_reason=True, go_dark_after=PRECHECK_POSTS + 4) as fleet:
         result = _verify(tmp_path, _profile(tmp_path, fleet))
     assert result.returncode == 1, result.stderr
 
@@ -133,7 +134,7 @@ def test_a_real_failure_before_the_loss_still_exits_1(tmp_path):
 
 
 def test_a_non_local_ingress_losing_its_connection_stays_a_fleet_result(tmp_path):
-    with FakeFleet(go_dark_after=3) as fleet:
+    with FakeFleet(go_dark_after=PRECHECK_POSTS + 3) as fleet:
         result = _verify(tmp_path, _profile(tmp_path, fleet), non_local=True)
     assert result.returncode == 1, result.stderr
 
@@ -163,7 +164,7 @@ def test_a_local_server_that_crashes_and_recovers_is_a_fleet_failure(tmp_path):
     # one request, stays down for the next connections and comes back. The fleet crashed.
     with (
         FakeFleet() as fleet,
-        LocalForward(fleet.base_url, crash_on_post=3, down_for=3) as forward,
+        LocalForward(fleet.base_url, crash_on_post=PRECHECK_POSTS + 3, down_for=3) as forward,
     ):
         result = _verify(tmp_path, _profile(tmp_path, fleet, base_url=forward.base_url))
         assert forward.accepting
@@ -196,7 +197,10 @@ def _ipv6_loopback() -> bool:
 def test_a_local_listener_that_goes_away_exits_3(tmp_path, host):
     if host == "::1" and not _ipv6_loopback():
         pytest.skip("this machine has no IPv6 loopback")
-    with FakeFleet() as fleet, LocalForward(fleet.base_url, host=host, close_on_post=3) as forward:
+    with (
+        FakeFleet() as fleet,
+        LocalForward(fleet.base_url, host=host, close_on_post=PRECHECK_POSTS + 3) as forward,
+    ):
         result = _verify(tmp_path, _profile(tmp_path, fleet, base_url=forward.base_url))
         assert not forward.accepting
     assert result.returncode == 3, result.stderr

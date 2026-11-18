@@ -184,6 +184,7 @@ def run(
 
     for ingress_id in selected:
         ingress = profile.ingress(ingress_id)
+        ingress_index = profile.ingress_ids.index(ingress_id)
         commands = _resolve_setup(ingress, profile, kube)
         report.resolved_setup[ingress_id] = commands
 
@@ -234,7 +235,7 @@ def run(
         if answered:
             report.reachable.add(ingress_id)
             report.latency_ms[ingress_id] = elapsed_ms
-            _check_access(report, ingress)
+            _check_access(report, profile, ingress, ingress_index)
         else:
             remedy = "\n            ".join(commands) if commands else None
             report.problems.append(
@@ -370,7 +371,13 @@ def reachable(ingress: Ingress) -> tuple[bool, float]:
 LISTED_SHOWN = 8
 
 
-def _check_access(report: Report, ingress: Ingress) -> None:
+def _model_field(profile: Profile, ingress: Ingress, ingress_index: int, name: str) -> str:
+    if getattr(ingress.model, name) != getattr(profile.model, name):
+        return f"ingresses[{ingress_index}]({ingress.id}).model.{name}"
+    return f"model.{name}"
+
+
+def _check_access(report: Report, profile: Profile, ingress: Ingress, ingress_index: int) -> None:
     """Whether this key can use this ingress's model, from one GET of the model list.
 
     The health probe deliberately does not authenticate (gateways exempt their health paths),
@@ -399,7 +406,7 @@ def _check_access(report: Report, ingress: Ingress) -> None:
         report.warnings.append(
             Problem(ingress.id, "access", "could not list models to confirm access; not checked")
         )
-        _check_declared_apis(report, ingress)
+        _check_declared_apis(report, ingress, ingress_index)
         return
     if status == 401:
         key = f"${ingress.auth.key_env}" if ingress.auth.key_env else "the key"
@@ -423,7 +430,7 @@ def _check_access(report: Report, ingress: Ingress) -> None:
                 "was not confirmed before the run",
             )
         )
-        _check_declared_apis(report, ingress)
+        _check_declared_apis(report, ingress, ingress_index)
         return
     listed = [entry.get("id") for entry in data if isinstance(entry, dict) and entry.get("id")]
     if model in listed:
@@ -431,8 +438,8 @@ def _check_access(report: Report, ingress: Ingress) -> None:
         entry = next(
             (item for item in data if isinstance(item, dict) and item.get("id") == model), None
         )
-        _check_declared_context(report, ingress, entry)
-        _check_declared_apis(report, ingress)
+        _check_declared_context(report, profile, ingress, ingress_index, entry)
+        _check_declared_apis(report, ingress, ingress_index)
         return
     shown = ", ".join(str(name) for name in listed[:LISTED_SHOWN])
     more = f" and {len(listed) - LISTED_SHOWN} more" if len(listed) > LISTED_SHOWN else ""
@@ -440,7 +447,8 @@ def _check_access(report: Report, ingress: Ingress) -> None:
         Problem(
             ingress.id,
             "access",
-            f"profile and deployment disagree: profile model.public_id declares {model!r}, "
+            f"profile and deployment disagree: profile "
+            f"{_model_field(profile, ingress, ingress_index, 'public_id')} declares {model!r}, "
             "but it is not among the models this key can use here "
             f"({shown or 'none listed'}{more})",
             remedy="check the profile's model id, or ask the gateway owners to grant it to "
@@ -449,7 +457,9 @@ def _check_access(report: Report, ingress: Ingress) -> None:
     )
 
 
-def _check_declared_context(report: Report, ingress: Ingress, entry: dict | None) -> None:
+def _check_declared_context(
+    report: Report, profile: Profile, ingress: Ingress, ingress_index: int, entry: dict | None
+) -> None:
     """Compare the stated context window when the model listing reports one."""
     declared = ingress.model.max_model_len
     if declared is None:
@@ -460,8 +470,9 @@ def _check_declared_context(report: Report, ingress: Ingress, entry: dict | None
             Problem(
                 ingress.id,
                 "access",
-                "could not check profile model.max_model_len: deployment did not report "
-                "max_model_len in GET /v1/models; continuing",
+                f"could not check profile "
+                f"{_model_field(profile, ingress, ingress_index, 'max_model_len')}: deployment "
+                "did not report max_model_len in GET /v1/models; continuing",
             )
         )
         return
@@ -471,7 +482,8 @@ def _check_declared_context(report: Report, ingress: Ingress, entry: dict | None
         Problem(
             ingress.id,
             "access",
-            "profile and deployment disagree: profile model.max_model_len declares "
+            "profile and deployment disagree: profile "
+            f"{_model_field(profile, ingress, ingress_index, 'max_model_len')} declares "
             f"{declared}, but deployment reported {observed}",
             remedy="check the profile and deployment configuration; llmdv cannot determine "
             "which is wrong",
@@ -479,7 +491,7 @@ def _check_declared_context(report: Report, ingress: Ingress, entry: dict | None
     )
 
 
-def _check_declared_apis(report: Report, ingress: Ingress) -> None:
+def _check_declared_apis(report: Report, ingress: Ingress, ingress_index: int) -> None:
     """Probe each declared API with the same valid request body as the contract suite."""
     paths = [(name, SURFACE_PATHS[name]) for name in ingress.surfaces if name in SURFACE_PATHS]
     if not paths:
@@ -513,7 +525,8 @@ def _check_declared_apis(report: Report, ingress: Ingress) -> None:
                     Problem(
                         ingress.id,
                         "access",
-                        f"could not check profile ingresses[{ingress.id}].surfaces declares "
+                        "could not check profile "
+                        f"ingresses[{ingress_index}]({ingress.id}).surfaces declares "
                         f"{name!r}: {observed}; continuing",
                     )
                 )
@@ -523,7 +536,7 @@ def _check_declared_apis(report: Report, ingress: Ingress) -> None:
                         ingress.id,
                         "access",
                         f"profile and deployment disagree: profile "
-                        f"ingresses[{ingress.id}].surfaces declares {name!r}, "
+                        f"ingresses[{ingress_index}]({ingress.id}).surfaces declares {name!r}, "
                         f"but its probe {path} returned {observed}",
                         remedy=f"remove {name!r} from the profile or make the deployment answer it",
                     )

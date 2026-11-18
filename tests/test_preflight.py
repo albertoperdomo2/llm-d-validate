@@ -45,6 +45,7 @@ def build(
     proxy="bypass",
     model=MODEL,
     max_model_len=None,
+    ingress_max_model_len=None,
 ):
     path = tmp_path / "pf.yaml"
     declared = "" if max_model_len is None else f"\n  max_model_len: {max_model_len}"
@@ -52,6 +53,12 @@ def build(
         "model: {{public_id: {model}}}", "model:\n  public_id: {model}" + declared
     )
     text = text.format(base_url=base_url, auth=auth, proxy=proxy, model=model)
+    if ingress_max_model_len is not None:
+        text = text.replace(
+            "    surfaces: [chat_completions]",
+            f"    model: {{max_model_len: {ingress_max_model_len}}}\n"
+            "    surfaces: [chat_completions]",
+        )
     path.write_text(textwrap.dedent(text))
     return loader.load(path)
 
@@ -132,6 +139,16 @@ def test_a_context_window_mismatch_stops_preflight(tmp_path):
     assert "256" in problem.message and "512" in problem.message
 
 
+def test_a_context_window_override_names_its_ingress_profile_line(tmp_path):
+    with FakeFleet(advertised_max_model_len=512) as fleet:
+        report = preflight.run(
+            build(tmp_path, fleet.base_url, max_model_len=256, ingress_max_model_len=128)
+        )
+    problem = next(problem for problem in report.problems if problem.kind == "access")
+    assert "ingresses[0](one).model.max_model_len" in problem.message
+    assert "128" in problem.message and "512" in problem.message
+
+
 def test_an_unreported_context_window_is_only_a_warning(tmp_path):
     with FakeFleet(advertised_max_model_len=None) as fleet:
         report = preflight.run(build(tmp_path, fleet.base_url, max_model_len=256))
@@ -147,7 +164,7 @@ def test_a_declared_api_that_does_not_answer_stops_preflight(tmp_path):
         report = preflight.run(build(tmp_path, fleet.base_url))
     assert not report.ok
     problem = next(problem for problem in report.problems if problem.kind == "access")
-    assert "ingresses[one].surfaces" in problem.message
+    assert "ingresses[0](one).surfaces" in problem.message
     assert "chat_completions" in problem.message
     assert "HTTP 404" in problem.message
 
