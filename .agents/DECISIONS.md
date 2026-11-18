@@ -196,8 +196,8 @@ Human reference: [../docs/compare.md](../docs/compare.md).
 | `skip → fail` | new evidence, not new breakage |
 
 Zero cases is never a pass, a changed `profile_digest` is reported before the findings with the
-declarations that moved, and only scheduled (`trigger=nightly`) runs are baselines for
-`llmdv job --compare`.
+declarations that moved. Automatic baselines match the run identity; a missing identity is never
+selected, and the default trigger is `manual`.
 
 *Why:* a skip is an absence of evidence. Reporting it as a failure trains people to ignore the
 alert, and hiding it lets coverage drain away. Silence after a fix is how people stop trusting

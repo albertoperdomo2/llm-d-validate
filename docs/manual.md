@@ -336,6 +336,10 @@ agent-written analysis on the page, use the
 `llmdv compare` reads two runs of the same profile back from the archive and reports which cases
 changed their answer. See [docs/compare.md](compare.md).
 
+Use repeated `--identity key=value` options on `verify` or `job` for lane dimensions
+`accelerator`, `provider`, `llm_d_ref` and `trigger`; trigger defaults to `manual`. Baselines are
+chosen only from runs with matching configuration identity. `--label` cannot use identity keys.
+
 ## Running unattended
 
 `llmdv job` runs verify as a child process, then publishes and notifies however verify ended. The

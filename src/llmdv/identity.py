@@ -1,0 +1,105 @@
+"""The fixed configuration identity of a verification run."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from . import __version__
+from .profile.schema import IngressKind, Profile
+
+DIMENSIONS = (
+    "guide",
+    "accelerator",
+    "engine",
+    "provider",
+    "gateway",
+    "model",
+    "llm_d_ref",
+    "llmdv_version",
+    "profile_digest",
+    "trigger",
+)
+CONFIGURATION_DIMENSIONS = (
+    "guide",
+    "accelerator",
+    "engine",
+    "provider",
+    "gateway",
+    "model",
+    "trigger",
+)
+LANE_DIMENSIONS = ("accelerator", "provider", "llm_d_ref", "trigger")
+_ALIASES = {"llm-d-ref": "llm_d_ref", "llm-d_ref": "llm_d_ref"}
+RESERVED_LABELS = frozenset(DIMENSIONS) | {
+    "llm-d-ref",
+    "llm-d_ref",
+    "llmdv-version",
+    "profile-digest",
+}
+
+
+class IdentityError(ValueError):
+    """A lane identity is malformed or contradicts the profile."""
+
+
+def parse(values: list[str] | None) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for item in values or []:
+        key, sep, value = item.partition("=")
+        key = _ALIASES.get(key, key)
+        if not sep or key not in LANE_DIMENSIONS or not value:
+            raise IdentityError(
+                f"--identity must be one of key=value for {', '.join(LANE_DIMENSIONS)}; "
+                f"got {item!r}"
+            )
+        result[key] = value
+    result.setdefault("trigger", "manual")
+    return result
+
+
+def _implementation(profile: Profile, kind: IngressKind, role: str) -> str | None:
+    for ingress in profile.ingresses:
+        if (ingress.kind is kind or ingress.role == role) and getattr(
+            ingress, "implementation", None
+        ):
+            return ingress.implementation
+    return None
+
+
+def build(
+    profile: Profile, lane: dict[str, str], profile_digest: str | None
+) -> dict[str, str | None]:
+    """Build one identity; only lane dimensions may be supplied by the caller."""
+    values: dict[str, str | None] = {
+        "guide": getattr(profile, "guide", None),
+        "accelerator": lane.get("accelerator"),
+        "engine": _implementation(profile, IngressKind.VLLM, "engine"),
+        "provider": lane.get("provider"),
+        "gateway": _implementation(profile, IngressKind.LITELLM, "gateway"),
+        "model": profile.model.public_id,
+        "llm_d_ref": lane.get("llm_d_ref"),
+        "llmdv_version": __version__,
+        "profile_digest": profile_digest,
+        "trigger": lane.get("trigger", "manual"),
+    }
+    return values
+
+
+def validate_lane(identity: dict[str, str], actual: dict[str, str | None]) -> None:
+    mismatches = [
+        f"{key}={identity[key]!r} (profile has {actual.get(key)!r})"
+        for key in identity
+        if key not in LANE_DIMENSIONS or identity[key] != actual.get(key)
+    ]
+    if mismatches:
+        raise IdentityError("identity mismatch: " + ", ".join(mismatches))
+
+
+def differences(before: dict[str, Any] | None, after: dict[str, Any] | None) -> list[str]:
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return []
+    return [
+        f"{key}: {before.get(key)!r} -> {after.get(key)!r}"
+        for key in DIMENSIONS
+        if before.get(key) != after.get(key)
+    ]

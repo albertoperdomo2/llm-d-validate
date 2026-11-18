@@ -266,6 +266,11 @@ def read_trigger(uri: str, profile: str, run_id: str) -> str | None:
     return labels.get("trigger") if isinstance(labels, dict) else None
 
 
+def read_identity(uri: str, profile: str, run_id: str) -> dict | None:
+    identity = (read_outcome(uri, profile, run_id) or {}).get("identity")
+    return identity if isinstance(identity, dict) and identity else None
+
+
 def read_stack(uri: str, profile: str, run_id: str) -> dict:
     """The stack block a published run recorded, or an empty one for runs that predate it."""
     stack = (read_outcome(uri, profile, run_id) or {}).get("stack")

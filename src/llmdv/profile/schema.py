@@ -367,6 +367,9 @@ class Ingress:
     # Fully resolved by the loader, including inherited profile defaults.
     model: Model
     capabilities: Capabilities
+    # Optional safe build/name supplied by the deployment owner for run identity.
+    implementation: str | None = None
+    role: str | None = None
     auth: Auth = field(default_factory=Auth)
     # The environment variable that holds `base_url`, for a profile that is committed: a real
     # gateway hostname is cluster-identifiable and stays out of the repository, like the key.
@@ -1015,6 +1018,7 @@ class Profile:
     name: str
     model: Model
     ingresses: tuple[Ingress, ...]
+    guide: str | None = None
     schema: str = "llmdv.profile/1"
     vantage: Vantage = Vantage.EXTERNAL
     environment: Environment = field(default_factory=Environment)

@@ -112,6 +112,7 @@ def build(run_dir: Path) -> dict[str, Any] | None:
     return {
         "schema": SCHEMA,
         "run_id": body.get("run_id"),
+        "identity": body.get("identity") or {},
         "profile": (body.get("profile") or {}).get("name"),
         "profile_digest": next(
             (r["profile_digest"] for r in records if r.get("profile_digest")), None

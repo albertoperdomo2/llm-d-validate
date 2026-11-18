@@ -45,6 +45,14 @@ compare.
 
 ## How a request reaches the fleet
 
+## Run identity
+
+Each run records one fixed identity in `outcome.json`, `alerts.json` and `comparison.json`.
+Guide, engine, gateway and model come from the profile; accelerator, provider, `llm_d_ref` and
+trigger come from `--identity`; llmdv records its version and the profile digest. Automatic
+comparisons require matching configuration dimensions, so different overlays cannot become one
+another's baselines.
+
 Two channels, deliberately separate. The **data plane** is the thing under test: ordinary HTTP to
 whatever address the profile declares. The **control plane** only makes the data plane legible:
 resolving a selector to a pod that exists now, and pulling logs for the run window.

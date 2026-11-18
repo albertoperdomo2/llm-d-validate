@@ -474,6 +474,7 @@ def _build(raw: dict[str, Any], path: Path, clients_dir: Path) -> Profile:
             **_each(
                 schema=lambda: str(raw.get("schema", SUPPORTED_SCHEMA)),
                 name=lambda: str(raw.get("name") or path.stem),
+                guide=lambda: _opt_str(raw.get("guide")),
                 vantage=lambda: _enum(Vantage, raw.get("vantage"), Vantage.EXTERNAL, "vantage"),
                 environment=lambda: _environment(_block(raw.get("environment"), "environment")),
                 model=inherited("model", _model),
@@ -833,6 +834,8 @@ def _ingress(
             ),
             kind=lambda: _enum(IngressKind, raw.get("kind"), IngressKind.VLLM, f"{at}.kind"),
             base_url=lambda: _base_url(raw, at),
+            implementation=lambda: _opt_str(raw.get("implementation")),
+            role=lambda: _opt_str(raw.get("role")),
             base_url_env=lambda: _opt_str(raw.get("base_url_env")),
             auth=lambda: _auth(_block(raw.get("auth"), f"{at}.auth"), f"{at}.auth"),
             health_path=lambda: str(raw.get("health_path") or "/health"),
