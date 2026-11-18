@@ -167,7 +167,7 @@ def test_a_model_the_fleet_does_not_offer_stops_the_run_in_preflight(tmp_path):
             {"max_model_len": 256},
             "model.max_model_len",
         ),
-        ({"serve_chat": False}, {}, "ingresses[fake].surfaces"),
+        ({"serve_chat": False}, {}, "ingresses[0](fake).surfaces"),
     ],
     ids=["context-mismatch", "declared-api-mismatch"],
 )
