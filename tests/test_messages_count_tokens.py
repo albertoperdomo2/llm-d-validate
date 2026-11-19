@@ -233,7 +233,9 @@ def test_agent_cli_counts_with_profile_auth_and_redacts_evidence(tmp_path, auth_
     traffic = exchanges(run_dir)
     assert len(traffic) == 3
     assert {e["case_id"] for e in traffic} == {RAW_CASE, SDK_CASE}
-    for _, path, headers in fleet.seen:
+    count_requests = [entry for entry in fleet.seen if entry[1] == COUNT_TOKENS_PATH]
+    assert len(count_requests) == 3
+    for _, path, headers in count_requests:
         assert path == COUNT_TOKENS_PATH
         assert {k.lower(): v for k, v in headers.items()}[header[0].lower()] == header[1]
     for path in run_dir.rglob("*"):

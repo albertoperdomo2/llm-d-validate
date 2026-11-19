@@ -34,6 +34,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
+from .http import redact
 from .http.client import RecordingClient
 from .http.redact import scrub
 from .kube import NO_CLI_REASON, KubeContext, KubeError
@@ -42,6 +43,7 @@ from .output.remote import UnsupportedRemote, parse_remote_uri, sink_for
 from .profile.loader import resolve_secret
 from .profile.schema import AuthType, Ingress, Profile, ProxyMode, Requirement
 from .profile.transport import plain_http_url
+from .surfaces.base import SURFACE_PATHS, probe_request
 
 if TYPE_CHECKING:
     from .fleet.prometheus import MetricsErrorKind
@@ -125,6 +127,13 @@ def run(
     """Check everything needed before the first test. Never mutates anything."""
     report = Report()
     selected = ingress_ids or list(profile.ingress_ids)
+    # Preflight sends authenticated requests before pytest's plugin has a chance to register
+    # the profile secrets. Register them here so a response that echoes a key cannot reach a
+    # log or any evidence produced while preflight is running.
+    secrets = [
+        secret for ingress_id in selected if (secret := resolve_secret(profile.ingress(ingress_id)))
+    ]
+    redact.install_secrets(secrets)
 
     for uri, area in ((remote_output, "output"), (artifact_sink, "artifact_sink")):
         if not uri:
@@ -183,6 +192,7 @@ def run(
 
     for ingress_id in selected:
         ingress = profile.ingress(ingress_id)
+        ingress_index = profile.ingress_ids.index(ingress_id)
         commands = _resolve_setup(ingress, profile, kube)
         report.resolved_setup[ingress_id] = commands
 
@@ -233,7 +243,7 @@ def run(
         if answered:
             report.reachable.add(ingress_id)
             report.latency_ms[ingress_id] = elapsed_ms
-            _check_access(report, ingress)
+            _check_access(report, profile, ingress, ingress_index)
         else:
             remedy = "\n            ".join(commands) if commands else None
             report.problems.append(
@@ -369,7 +379,13 @@ def reachable(ingress: Ingress) -> tuple[bool, float]:
 LISTED_SHOWN = 8
 
 
-def _check_access(report: Report, ingress: Ingress) -> None:
+def _model_field(profile: Profile, ingress: Ingress, ingress_index: int, name: str) -> str:
+    if getattr(ingress.model, name) != getattr(profile.model, name):
+        return f"ingresses[{ingress_index}]({ingress.id}).model.{name}"
+    return f"model.{name}"
+
+
+def _check_access(report: Report, profile: Profile, ingress: Ingress, ingress_index: int) -> None:
     """Whether this key can use this ingress's model, from one GET of the model list.
 
     The health probe deliberately does not authenticate (gateways exempt their health paths),
@@ -398,6 +414,7 @@ def _check_access(report: Report, ingress: Ingress) -> None:
         report.warnings.append(
             Problem(ingress.id, "access", "could not list models to confirm access; not checked")
         )
+        _check_declared_apis(report, ingress, ingress_index)
         return
     if status == 401:
         key = f"${ingress.auth.key_env}" if ingress.auth.key_env else "the key"
@@ -421,10 +438,16 @@ def _check_access(report: Report, ingress: Ingress) -> None:
                 "was not confirmed before the run",
             )
         )
+        _check_declared_apis(report, ingress, ingress_index)
         return
     listed = [entry.get("id") for entry in data if isinstance(entry, dict) and entry.get("id")]
     if model in listed:
         log.debug("%s lists %s", ingress.id, model)
+        entry = next(
+            (item for item in data if isinstance(item, dict) and item.get("id") == model), None
+        )
+        _check_declared_context(report, profile, ingress, ingress_index, entry)
+        _check_declared_apis(report, ingress, ingress_index)
         return
     shown = ", ".join(str(name) for name in listed[:LISTED_SHOWN])
     more = f" and {len(listed) - LISTED_SHOWN} more" if len(listed) > LISTED_SHOWN else ""
@@ -432,12 +455,103 @@ def _check_access(report: Report, ingress: Ingress) -> None:
         Problem(
             ingress.id,
             "access",
-            f"{model!r} is not among the models this key can use here "
+            f"profile and deployment disagree: profile "
+            f"{_model_field(profile, ingress, ingress_index, 'public_id')} declares {model!r}, "
+            "but it is not among the models this key can use here "
             f"({shown or 'none listed'}{more})",
             remedy="check the profile's model id, or ask the gateway owners to grant it to "
             "this key",
         )
     )
+
+
+def _check_declared_context(
+    report: Report, profile: Profile, ingress: Ingress, ingress_index: int, entry: dict | None
+) -> None:
+    """Compare the stated context window when the model listing reports one."""
+    declared = ingress.model.max_model_len
+    if declared is None:
+        return
+    observed = entry.get("max_model_len") if isinstance(entry, dict) else None
+    if type(observed) is not int:
+        report.warnings.append(
+            Problem(
+                ingress.id,
+                "access",
+                f"could not check profile "
+                f"{_model_field(profile, ingress, ingress_index, 'max_model_len')}: deployment "
+                "did not report max_model_len in GET /v1/models; continuing",
+            )
+        )
+        return
+    if observed == declared:
+        return
+    report.problems.append(
+        Problem(
+            ingress.id,
+            "access",
+            "profile and deployment disagree: profile "
+            f"{_model_field(profile, ingress, ingress_index, 'max_model_len')} declares "
+            f"{declared}, but deployment reported {observed}",
+            remedy="check the profile and deployment configuration; llmdv cannot determine "
+            "which is wrong",
+        )
+    )
+
+
+def _check_declared_apis(report: Report, ingress: Ingress, ingress_index: int) -> None:
+    """Probe each declared API with the same valid request body as the contract suite."""
+    paths = [(name, SURFACE_PATHS[name]) for name in ingress.surfaces if name in SURFACE_PATHS]
+    if not paths:
+        return
+    with RecordingClient(
+        ingress.base_url,
+        default_headers=ingress.auth.header(resolve_secret(ingress)),
+        connect_timeout=ingress.timeouts.connect,
+        request_timeout=min(ingress.timeouts.connect * 3, 15.0),
+        trust_env=ingress.setup.proxy is ProxyMode.ALLOW,
+        verify=ingress.tls.verify,
+    ) as client:
+        for name, path in paths:
+            body, headers = probe_request(name, ingress.model.public_id)
+            exchange = client.post(path, json_body=body, headers=headers)
+            if exchange.status is not None and 200 <= exchange.status < 300:
+                continue
+            observed = (
+                f"transport error {exchange.transport_error}"
+                if exchange.transport_error
+                else f"HTTP {exchange.status}"
+            )
+            # Auth-protected endpoints can reject a valid probe while the model-list check has
+            # already established that the credential reaches the deployment. That proves the
+            # route exists, but not whether this particular endpoint permits the probe.
+            inconclusive = (
+                exchange.transport_error
+                or exchange.status is None
+                or exchange.status in (401, 403, 429)
+                or 500 <= exchange.status < 600
+            )
+            if inconclusive:
+                report.warnings.append(
+                    Problem(
+                        ingress.id,
+                        "access",
+                        "could not check profile "
+                        f"ingresses[{ingress_index}]({ingress.id}).surfaces declares "
+                        f"{name!r}: {observed}; continuing",
+                    )
+                )
+            else:
+                report.problems.append(
+                    Problem(
+                        ingress.id,
+                        "access",
+                        f"profile and deployment disagree: profile "
+                        f"ingresses[{ingress_index}]({ingress.id}).surfaces declares {name!r}, "
+                        f"but its probe {path} returned {observed}",
+                        remedy=f"remove {name!r} from the profile or make the deployment answer it",
+                    )
+                )
 
 
 def _check_log_access(

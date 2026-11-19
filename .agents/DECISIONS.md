@@ -56,6 +56,11 @@ the surface is going untested).
 silently: a surface that appears after the profile was written is never tested, and nobody is
 told.
 
+Preflight also compares declared model facts that the deployment reports in the same model-list
+response, and probes each declared API with the contract suite's valid request body before any
+case runs. A mismatch is an exit-3 profile/deployment disagreement; an omitted engine fact is
+reported as unchecked and does not stop the run.
+
 The same rule makes deviations honest. A layer that answers an error in prose
 (`unstructured_errors`) or does not enforce a class (a success status in `error_status`) is
 declared per ingress and still asserted, inverted. Because the declaration fails when the layer

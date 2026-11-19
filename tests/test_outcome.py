@@ -159,6 +159,36 @@ def test_a_model_the_fleet_does_not_offer_stops_the_run_in_preflight(tmp_path):
     assert not results.exists() or not results.read_text().strip()
 
 
+@pytest.mark.parametrize(
+    "fleet_kwargs, profile_kwargs, expected",
+    [
+        (
+            {"advertised_max_model_len": 512},
+            {"max_model_len": 256},
+            "model.max_model_len",
+        ),
+        ({"serve_chat": False}, {}, "ingresses[0](fake).surfaces"),
+    ],
+    ids=["context-mismatch", "declared-api-mismatch"],
+)
+def test_profile_deployment_mismatch_stops_before_testing(
+    tmp_path, fleet_kwargs, profile_kwargs, expected
+):
+    with FakeFleet(**fleet_kwargs) as fleet:
+        profile = write_profile(tmp_path, fleet, **profile_kwargs)
+        run_dir = tmp_path / "run"
+        result = run_llmdv(
+            "verify", "--profile", str(profile), "--local-output", str(run_dir), "--pod-logs", "off"
+        )  # fmt: skip
+
+    assert result.returncode == 3, result.stderr
+    outcome = outcome_of(run_dir)
+    assert outcome["verification"]["class"] == "environment"
+    assert any(expected in problem for problem in outcome["preflight_problems"])
+    results = run_dir / "results.jsonl"
+    assert not results.exists() or not results.read_text().strip()
+
+
 def test_sigint_mid_run_is_an_interrupted_outcome_not_a_crash(tmp_path):
     """What the runner's `timeout -s INT` does when the run budget expires."""
     with FakeFleet(delay_s=1.0) as fleet:

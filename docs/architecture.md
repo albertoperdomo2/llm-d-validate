@@ -79,8 +79,13 @@ fleet. In-cluster, the same profile points at Service DNS and `setup` is empty.
 
 Preflight also sends one authenticated `GET /v1/models` per reachable ingress, since health paths
 are exempt from auth. A 401 is a `credentials` problem and a list that omits the profile's
-`public_id` is an `access` problem, both exit 3 before any case runs; a 403, a 404 or an
-unreadable list is only a warning, because the check could not decide.
+`public_id` is an `access` problem, both exit 3 before any case runs. If the profile declares
+`model.max_model_len`, the same response is compared when it reports `max_model_len`; an omitted
+window is recorded as unchecked and does not stop the run. Finally, each declared API is probed
+with the same shape-valid body used by the contract suite. A mismatch names the profile field and
+the deployment's observed value, exits 3, and says only that the two disagree. A 403, a 404 or an
+unreadable model list is a warning for the model-list check; declared API probes still run and
+decide independently when their routes answer.
 
 ## A run, end to end
 

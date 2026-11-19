@@ -334,8 +334,13 @@ def test_agent_cli_selects_both_cases_with_authentication_and_redacted_evidence(
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert {e["case_id"] for e in exchanges(run_dir)} == CASES
-    assert len(fleet.seen) == 2
-    for _, _, headers in fleet.seen:
+    # Preflight probes each of the three declared surfaces, plus GET /v1/models.
+    assert len(fleet.seen) == 6
+    case_requests = [
+        entry for entry in fleet.seen if entry[1] in ("/v1/chat/completions", "/v1/messages")
+    ]
+    assert len(case_requests) == 4
+    for _, _, headers in case_requests:
         assert {k.lower(): v for k, v in headers.items()}[header[0].lower()] == header[1]
     for path in run_dir.rglob("*"):
         if path.is_file() and path.suffix in {".json", ".jsonl", ".log", ".md", ".txt", ".sh"}:

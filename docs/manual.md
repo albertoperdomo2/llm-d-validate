@@ -59,6 +59,12 @@ Cases run grouped by phase, contract first, then by ingress in the order the pro
 them. `-v` prints the recorded checks under each case. How llmdv finds a cluster CLI, and which
 stream gets what, is in [docs/architecture.md](architecture.md#how-a-request-reaches-the-fleet).
 
+Before collection, preflight compares each declared `model.max_model_len` with the matching
+`max_model_len` in `GET /v1/models` when the deployment reports one, and probes every declared
+API with the contract suite's shape-valid request. A mismatch exits `3` before any case runs and
+names the profile field and observed deployment value. If the deployment omits its context
+window, preflight records that it could not check it and continues.
+
 ## Selecting what runs
 
 ```sh

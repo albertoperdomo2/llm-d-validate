@@ -183,7 +183,7 @@ def test_agent_cli_uses_profile_auth_for_raw_and_sdk_and_redacts_evidence(tmp_pa
     assert {r["case_id"] for r in records} == CASES
     assert all(r["outcome"] == "pass" for r in records)
     requests = [headers for _, path, headers in fleet.seen if path == "/v1/messages"]
-    assert len(requests) == 2
+    assert len(requests) == 3
     for headers in requests:
         headers = {name.lower(): value for name, value in headers.items()}
         if expected:
