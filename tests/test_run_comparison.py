@@ -145,26 +145,42 @@ import json  # noqa: E402
 
 import pytest  # noqa: E402
 
+from llmdv.cli import compare_cmd  # noqa: E402
 from llmdv.cli.main import main  # noqa: E402
 from llmdv.compare.archive import (  # noqa: E402
+    ArchiveUnreadable,
     NoSuchRun,
     list_runs,
     pick_pair,
+    read_outcome,
     read_results,
 )
 from llmdv.output import manifest  # noqa: E402
 from tests.fakes import run_llmdv  # noqa: E402
 
 
-def archive(tmp_path, profile="p", runs=None, triggers=None):
+def archive(tmp_path, profile="p", runs=None, triggers=None, accelerators=None):
     """A published-run layout: <root>/<profile>/<run-id>/results.jsonl."""
     for run_id, records in (runs or {}).items():
         d = tmp_path / profile / run_id
         d.mkdir(parents=True)
         (d / "results.jsonl").write_text("\n".join(json.dumps(r) for r in records))
         trigger = (triggers or {}).get(run_id, "nightly")
-        labels = {} if trigger is None else {"trigger": trigger}
-        (d / "outcome.json").write_text(json.dumps({"labels": labels}))
+        body = {}
+        if trigger is not None:
+            body["identity"] = {
+                "guide": "g",
+                "accelerator": (accelerators or {}).get(run_id, "amd"),
+                "engine": "vllm",
+                "provider": "p",
+                "gateway": None,
+                "model": "m",
+                "llm_d_ref": None,
+                "llmdv_version": "v",
+                "profile_digest": "d",
+                "trigger": trigger,
+            }
+        (d / "outcome.json").write_text(json.dumps(body))
         manifest.write(d)
     return f"file://{tmp_path}"
 
@@ -190,6 +206,20 @@ def test_results_are_read_back_as_records(tmp_path):
     assert read_results(uri, "p", "r1")[0]["case_id"] == "a"
 
 
+def test_a_present_but_unreadable_outcome_is_an_archive_error(tmp_path):
+    archive(tmp_path, runs={"r1": [rec("a", "pass")]})
+    (tmp_path / "p" / "r1" / "outcome.json").write_bytes(b"not utf-8: \xff")
+    with pytest.raises(ArchiveUnreadable, match="read .+outcome.json"):
+        read_outcome(f"file://{tmp_path}", "p", "r1")
+
+
+def test_a_non_object_outcome_is_an_archive_error(tmp_path):
+    archive(tmp_path, runs={"r1": [rec("a", "pass")]})
+    (tmp_path / "p" / "r1" / "outcome.json").write_text("[]")
+    with pytest.raises(ArchiveUnreadable, match="not a JSON object"):
+        read_outcome(f"file://{tmp_path}", "p", "r1")
+
+
 def test_reading_a_missing_run_says_which_one(tmp_path):
     with pytest.raises(NoSuchRun, match="r9"):
         read_results(archive(tmp_path), "p", "r9")
@@ -201,6 +231,16 @@ def test_the_default_pair_is_the_two_most_recent():
 
 def test_a_named_baseline_is_compared_against_the_latest():
     assert pick_pair(["r1", "r2", "r3"], baseline="r1") == ("r1", "r3")
+
+
+def test_metadata_failure_during_standalone_compare_is_environment_error(tmp_path, monkeypatch):
+    uri = archive(tmp_path, runs={"r1": [rec("a", "pass")], "r2": [rec("a", "pass")]})
+    monkeypatch.setattr(
+        compare_cmd,
+        "read_stack",
+        lambda *args: (_ for _ in ()).throw(ArchiveUnreadable("transient metadata read")),
+    )
+    assert main(["compare", "--from", uri, "--profile", "p", "--baseline", "r1"]) == 3
 
 
 def test_a_single_run_refuses_rather_than_reporting_a_clean_comparison():
@@ -310,6 +350,7 @@ def test_a_regression_is_written_beside_the_results_and_reported(tmp_path):
     run_dir = tmp_path / "run" / "2026-01-02T00Z"
     run_dir.mkdir(parents=True)
     (run_dir / "results.jsonl").write_text(json.dumps(rec("a", "fail")) + "\n")
+    _write_identity(run_dir)
     code, text = compare_run(run_dir, uri, "p")
     assert code == 1, "a regression must be able to fail the job"
     assert "Newly failing" in (run_dir / COMPARISON_FILE).read_text()
@@ -341,8 +382,106 @@ def test_an_on_demand_comparison_uses_the_latest_nightly(tmp_path):
         triggers={"r2": "manual"},
     )
     current = _run_dir(tmp_path, [dict(rec("a", "fail"), run_id="r3")], name="r3")
+    _write_identity(current, trigger="nightly")
     code, text = compare_run(current, uri, "p")
     assert code == 1 and "`r1` → `r3`" in text
+
+
+def test_accelerator_lanes_compare_only_against_their_own_history(tmp_path):
+    arch = tmp_path / "archive"
+    uri = archive(
+        arch,
+        runs={
+            "amd-1": [rec("a", "pass")],
+            "tpu-1": [rec("a", "fail")],
+            "amd-2": [rec("a", "pass")],
+        },
+    )
+    (arch / "p" / "tpu-1" / "outcome.json").write_text(
+        json.dumps(
+            {
+                "identity": {
+                    "guide": "g",
+                    "accelerator": "tpu",
+                    "engine": "vllm",
+                    "provider": "p",
+                    "gateway": None,
+                    "model": "m",
+                    "llm_d_ref": None,
+                    "llmdv_version": "v",
+                    "profile_digest": "d",
+                    "trigger": "nightly",
+                }
+            }
+        )
+    )
+    current = _run_dir(tmp_path, [dict(rec("a", "pass"), run_id="tpu-2")], name="tpu-2")
+    _write_identity(current, accelerator="tpu")
+    code, text = compare_run(current, uri, "p")
+    assert code == 0 and "`tpu-1` → `tpu-2`" in text
+    current = _run_dir(tmp_path, [dict(rec("a", "pass"), run_id="amd-3")], name="amd-3")
+    _write_identity(current, accelerator="amd")
+    code, text = compare_run(current, uri, "p")
+    assert code == 0 and "`amd-2` → `amd-3`" in text
+
+
+def test_standalone_compare_reports_provenance_notes(tmp_path, capsys):
+    root = tmp_path / "archive"
+    uri = archive(root, runs={"r1": [rec("a", "pass")], "r2": [rec("a", "pass")]})
+    for run_id, ref in (("r1", "old"), ("r2", "new")):
+        (root / "p" / run_id / "outcome.json").write_text(
+            json.dumps(
+                {
+                    "identity": {
+                        "guide": "g",
+                        "accelerator": "amd",
+                        "engine": "vllm",
+                        "provider": "p",
+                        "gateway": None,
+                        "model": "m",
+                        "llm_d_ref": ref,
+                        "llmdv_version": "v",
+                        "profile_digest": "d",
+                        "trigger": "nightly",
+                    }
+                }
+            )
+        )
+    assert main(["compare", "--from", uri, "--profile", "p"]) == 0
+    assert "identity llm_d_ref: 'old' -> 'new'" in capsys.readouterr().out
+
+
+def test_standalone_compare_keeps_accelerator_lanes_separate(tmp_path):
+    uri = archive(
+        tmp_path / "archive",
+        runs={
+            "r1": [rec("a", "fail")],
+            "r2": [rec("a", "pass")],
+            "r3": [rec("a", "fail")],
+        },
+        accelerators={"r2": "tpu"},
+    )
+    assert main(["compare", "--from", uri, "--profile", "p"]) == 0
+
+
+def test_standalone_compare_refuses_a_mismatched_explicit_baseline(tmp_path, capsys):
+    uri = archive(
+        tmp_path / "archive",
+        runs={"r1": [rec("a", "pass")], "r2": [rec("a", "pass")]},
+        accelerators={"r2": "tpu"},
+    )
+    assert main(["compare", "--from", uri, "--profile", "p", "--baseline", "r1"]) == 2
+    assert "accelerator" in capsys.readouterr().err
+
+
+def test_standalone_compare_does_not_auto_pick_an_identityless_run(tmp_path):
+    uri = archive(
+        tmp_path / "archive",
+        runs={"r1": [rec("a", "pass")], "r2": [rec("a", "pass")]},
+        triggers={"r1": None},
+    )
+    assert main(["compare", "--from", uri, "--profile", "p"]) == 2
+    assert main(["compare", "--from", uri, "--profile", "p", "--baseline", "r1"]) == 0
 
 
 def test_a_window_counts_only_nightly_runs(tmp_path):
@@ -363,7 +502,7 @@ def test_a_window_counts_only_nightly_runs(tmp_path):
     assert "`r5` → `r6`" in text and "last 3 runs" in text
 
 
-def test_an_explicit_baseline_may_be_non_nightly(tmp_path):
+def test_an_explicit_baseline_with_a_different_trigger_is_refused(tmp_path):
     uri = archive(
         tmp_path / "archive",
         runs={"r1": [rec("a", "pass")], "r2": [rec("a", "fail")]},
@@ -371,7 +510,7 @@ def test_an_explicit_baseline_may_be_non_nightly(tmp_path):
     )
     current = _run_dir(tmp_path, [dict(rec("a", "fail"), run_id="r3")], name="r3")
     code, text = compare_run(current, uri, "p", baseline="r2")
-    assert code == 0 and "`r2` → `r3`" in text
+    assert code == 0 and "baseline identity differs in: trigger" in text
 
 
 def test_a_run_without_a_trigger_label_is_not_a_baseline(tmp_path):
@@ -425,7 +564,46 @@ def _run_dir(tmp_path, records, name="2026-01-03T00Z"):
     d = tmp_path / name
     d.mkdir(parents=True)
     (d / "results.jsonl").write_text("\n".join(json.dumps(r) for r in records) + "\n")
+    (d / "outcome.json").write_text(
+        json.dumps(
+            {
+                "identity": {
+                    "guide": "g",
+                    "accelerator": "amd",
+                    "engine": "vllm",
+                    "provider": "p",
+                    "gateway": None,
+                    "model": "m",
+                    "llm_d_ref": None,
+                    "llmdv_version": "v",
+                    "profile_digest": "d",
+                    "trigger": "nightly",
+                }
+            }
+        )
+    )
     return d
+
+
+def _write_identity(run_dir, trigger="nightly", accelerator="amd"):
+    (run_dir / "outcome.json").write_text(
+        json.dumps(
+            {
+                "identity": {
+                    "guide": "g",
+                    "accelerator": accelerator,
+                    "engine": "vllm",
+                    "provider": "p",
+                    "gateway": None,
+                    "model": "m",
+                    "llm_d_ref": None,
+                    "llmdv_version": "v",
+                    "profile_digest": "d",
+                    "trigger": trigger,
+                }
+            }
+        )
+    )
 
 
 def test_an_unreachable_archive_never_costs_the_notification(tmp_path, monkeypatch):
@@ -521,6 +699,7 @@ def test_the_comparison_is_uploaded_on_its_own(tmp_path):
     (run_dir / "results.jsonl").write_text(
         json.dumps(dict(rec("a", "fail"), run_id="2026-01-02T00Z")) + "\n"
     )
+    _write_identity(run_dir)
     compare_run(run_dir, f"file://{arch}", "p")
     assert (arch / "p" / "2026-01-02T00Z" / COMPARISON_FILE).is_file(), (
         "the comparison must reach the archive, not only the run directory"

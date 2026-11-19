@@ -242,28 +242,60 @@ NIGHTLY_TRIGGER = "nightly"
 
 
 def read_outcome(uri: str, profile: str, run_id: str) -> dict | None:
-    """A run's outcome.json as it was published, or None when it cannot be read."""
+    """A run's outcome.json as published, or None when it is genuinely absent.
+
+    A present outcome that cannot be read is an archive/environment failure, not a legacy run.
+    """
     profile = safe(profile, "profile name")
     run_id = safe(run_id, "run id")
     target = parse_remote_uri(uri)
-    try:
-        if target.scheme == "file":
-            path = Path(target.location) / profile / run_id / "outcome.json"
-            text = path.read_text(encoding="utf-8") if path.is_file() else None
-        elif target.scheme == "s3":
-            text = _s3(target).get_bytes(profile, run_id, "outcome.json").decode("utf-8")
-        else:
+    if target.scheme == "file":
+        path = Path(target.location) / profile / run_id / "outcome.json"
+        if not path.exists():
             return None
-        body = json.loads(text) if text is not None else None
-        return body if isinstance(body, dict) else None
-    except Exception:  # noqa: BLE001 -- advisory; a missing outcome is not an error here
-        return None
+        try:
+            body = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001 -- filesystem and JSON failures are environment errors
+            raise ArchiveUnreadable(_unreadable(f"read {path}", exc)) from exc
+        if not isinstance(body, dict):
+            raise ArchiveUnreadable(f"{path} is not a JSON object")
+        return body
+    if target.scheme == "s3":
+        from ..output.s3 import sdk_errors
+
+        try:
+            text = _s3(target).get_bytes(profile, run_id, "outcome.json").decode("utf-8")
+        except sdk_errors() as exc:
+            if _not_found(exc):
+                return None
+            raise ArchiveUnreadable(
+                _unreadable(f"read {profile}/{run_id}/outcome.json", exc)
+            ) from exc
+        except Exception as exc:  # noqa: BLE001 -- decoding and transport failures are unreadable
+            raise ArchiveUnreadable(
+                _unreadable(f"read {profile}/{run_id}/outcome.json", exc)
+            ) from exc
+        try:
+            body = json.loads(text)
+        except Exception as exc:  # noqa: BLE001 -- malformed published metadata is unreadable
+            raise ArchiveUnreadable(
+                _unreadable(f"read {profile}/{run_id}/outcome.json", exc)
+            ) from exc
+        if not isinstance(body, dict):
+            raise ArchiveUnreadable(f"{profile}/{run_id}/outcome.json is not a JSON object")
+        return body
+    return None
 
 
 def read_trigger(uri: str, profile: str, run_id: str) -> str | None:
     """Read a run's trigger label, or None when its outcome cannot identify one."""
     labels = (read_outcome(uri, profile, run_id) or {}).get("labels", {})
     return labels.get("trigger") if isinstance(labels, dict) else None
+
+
+def read_identity(uri: str, profile: str, run_id: str) -> dict | None:
+    identity = (read_outcome(uri, profile, run_id) or {}).get("identity")
+    return identity if isinstance(identity, dict) and identity else None
 
 
 def read_stack(uri: str, profile: str, run_id: str) -> dict:

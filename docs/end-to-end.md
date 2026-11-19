@@ -65,7 +65,7 @@ credentials loaded:
 ```sh
 llmdv verify --profile P --analyze --evidence all \
   --remote-output "s3://$AWS_BUCKET/<prefix>" \
-  --label trigger=on-demand --label "actor=$USER"
+  --identity trigger=manual --label "actor=$USER"
 ```
 
 Labels are free-form `key=value` pairs recorded in `outcome.json` and on the dashboard. For an
@@ -92,7 +92,7 @@ llmdv job --profile /etc/llmdv/profile.yaml --remote-output "s3://$AWS_BUCKET/<p
   `LLMDV_NOTIFY_WEBHOOK`. Run `llmdv job --help` for the full list.
 - **Arguments after `--`** go to `llmdv verify`, such as `-- -m contract`. `--analyze` and
   `--compare` are the job's own flags: a dashboard in the run, and a comparison after publishing.
-- **Scheduled runs** labelled `trigger=nightly` are the baselines for `--compare`
+- **Scheduled runs** pass `--identity trigger=nightly` and are the baselines for `--compare`
   ([docs/compare.md](compare.md)). Label one-off runs differently so they never become baselines.
 - **If publishing fails** and a fallback location is configured (`--fallback-output` or
   `LLMDV_FALLBACK_URI`), the run is kept there; `outcome.json` says where.
@@ -116,7 +116,7 @@ The job does what [Unattended](#unattended) describes, and prints `outcome.json`
 Deploying it (image, overlay, settings and Secret) and every `trigger.sh` option are in
 [deploy/README.md](../deploy/README.md).
 
-- **Scheduled runs** are labelled `trigger=nightly` and are the baselines for `--compare`
+- **Scheduled runs** pass `--identity trigger=nightly` and are the baselines for `--compare`
   ([compare.md](compare.md)).
 - **One-off runs:** the arguments after `--` replace the CronJob's `args:`; for example
   `-- --analyze --compare` for a full run with a dashboard and a comparison. These runs are

@@ -87,6 +87,15 @@ the deployment's observed value, exits 3, and says only that the two disagree. A
 unreadable model list is a warning for the model-list check; declared API probes still run and
 decide independently when their routes answer.
 
+## Run identity
+
+Each run records one fixed identity in `outcome.json`, `alerts.json` and `comparison.json`.
+Guide and model come from the profile; engine and gateway come from the `implementation` on their
+role layers; accelerator, provider, `llm_d_ref` and trigger come from `--identity`; llmdv records
+its version and the profile digest. Automatic comparisons require matching configuration
+dimensions, so different overlays cannot become one another's baselines. An unreadable archived
+identity is an archive/environment error, not a legacy run.
+
 ## A run, end to end
 
 Each stage fails in its own way, which is what lets the exit code say who is to blame.

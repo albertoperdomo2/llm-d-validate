@@ -5,6 +5,7 @@
 #
 # No `name` here: the guide spans many combinations (engine, model configuration and topology),
 # and each run must say which one it was. The combination file names itself.
+
 #
 # The router, as this guide configures it (FROM values):
 #   vLLM, SGLang, Atom   G/router/optimized-baseline.values.yaml: approx-prefix-cache-producer and
@@ -85,6 +86,8 @@
 #          -> fleet.config rules, which need cluster access a committed profile does not carry
 #   26     EPP Prometheus series when MONITORING=true -> fleet.metrics, same reason
 #   27     SGLang's Rust frontend on NVIDIA GPU -> contract_baseline in that combination
+
+guide: optimized-baseline
 
 capabilities:
   # Not declared, on purpose. The cache suite reads cached_tokens from each response, and no

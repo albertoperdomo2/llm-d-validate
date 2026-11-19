@@ -33,7 +33,7 @@ spec:
             - name: llmdv
               image: llmdv
               # `llmdv verify` selection arguments; empty runs everything the profile declares.
-              args: []
+              args: ["--identity", "trigger=nightly"]
               env:
                 - name: LLMDV_RUN_BUDGET
                   value: "3000"

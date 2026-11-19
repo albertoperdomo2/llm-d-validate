@@ -36,6 +36,11 @@ class IngressKind(str, Enum):
     LITELLM = "litellm"
 
 
+class IngressRole(str, Enum):
+    ENGINE = "engine"
+    GATEWAY = "gateway"
+
+
 # How deep each kind sits in a stack, outermost first. Determined rather than declared: vLLM
 # generates rather than forwarding, so it is terminal, and LiteLLM is the front door. The layer
 # graph (`topology.py`) is derived from these depths: each ingress fronts every ingress at the
@@ -367,6 +372,10 @@ class Ingress:
     # Fully resolved by the loader, including inherited profile defaults.
     model: Model
     capabilities: Capabilities
+    # The role and implementation identify this layer for run identity. They are optional so
+    # older profiles can continue using the profile-level compatibility fields.
+    role: IngressRole | None = None
+    implementation: str | None = None
     auth: Auth = field(default_factory=Auth)
     # The environment variable that holds `base_url`, for a profile that is committed: a real
     # gateway hostname is cluster-identifiable and stays out of the repository, like the key.
@@ -1015,6 +1024,9 @@ class Profile:
     name: str
     model: Model
     ingresses: tuple[Ingress, ...]
+    guide: str | None = None
+    engine: str | None = None
+    gateway: str | None = None
     schema: str = "llmdv.profile/1"
     vantage: Vantage = Vantage.EXTERNAL
     environment: Environment = field(default_factory=Environment)

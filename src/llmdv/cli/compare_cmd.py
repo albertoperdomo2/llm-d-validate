@@ -15,7 +15,6 @@ import json
 from pathlib import Path
 
 from ..compare.archive import (
-    NIGHTLY_TRIGGER,
     PROFILE_FILE,
     ArchiveUnreadable,
     EmptyRun,
@@ -27,11 +26,11 @@ from ..compare.archive import (
     pick_pair,
     pick_window,
     publish_one,
+    read_identity,
     read_local_results,
     read_profile,
     read_results,
     read_stack,
-    read_trigger,
     require_records,
 )
 from ..compare.diff import Delta, attach_stack, compare_window, digests
@@ -39,11 +38,20 @@ from ..compare.report import COMPARISON_FILE, COMPARISON_JSON, as_record, not_ma
 from ..evidence import outcome
 from ..evidence.stack import stack_from_run
 from ..http.redact import scrub
+from ..identity import CONFIGURATION_DIMENSIONS, differences
 from ..log.setup import emit, get_logger
 from ..output.remote import UnsupportedRemote, missing_credentials
 from .exit_codes import OK, PREFLIGHT, TEST_FAILURES, USAGE
 
 log = get_logger("cli.compare")
+
+
+def _identity_notes(before: dict | None, after: dict | None) -> list[str]:
+    return [
+        f"identity {item}"
+        for item in differences(before, after)
+        if item.split(":", 1)[0] not in CONFIGURATION_DIMENSIONS
+    ]
 
 
 def add_parser(subparsers, parents) -> None:
@@ -103,7 +111,13 @@ def compare_run(
         record("no comparison made: %s", exc)
         reason = " ".join(scrub(str(exc)).split()) or type(exc).__name__
         text = f"Comparison unavailable: {reason}"
-    _save_comparison(run_dir, source, profile, text, not_made(reason))
+    _save_comparison(
+        run_dir,
+        source,
+        profile,
+        text,
+        not_made(reason, (outcome.read(run_dir) or {}).get("identity")),
+    )
     return OK, text
 
 
@@ -114,6 +128,7 @@ def _compare_run(
     # and only use the archive to select a completely published baseline.
     after = require_records(read_local_results(run_dir), run_dir.name)
     runs = list_runs(source, profile)
+    current_identity = (outcome.read(run_dir) or {}).get("identity")
     if baseline:
         chosen = pick_window(runs, exclude=_run_id(after), baseline=baseline, size=window)
     else:
@@ -121,13 +136,31 @@ def _compare_run(
         for candidate in reversed(runs):
             if candidate == _run_id(after):
                 continue
-            if read_trigger(source, profile, candidate) == NIGHTLY_TRIGGER:
+            candidate_identity = read_identity(source, profile, candidate)
+            if (
+                candidate_identity
+                and isinstance(current_identity, dict)
+                and all(
+                    candidate_identity.get(key) == current_identity.get(key)
+                    for key in CONFIGURATION_DIMENSIONS
+                )
+            ):
                 chosen.append(candidate)
                 if len(chosen) == max(1, window):
                     break
         if not chosen:
             raise NoSuchRun("the archive holds no earlier nightly run of this profile")
         chosen.reverse()
+    if baseline:
+        baseline_identity = read_identity(source, profile, chosen[0])
+        if isinstance(current_identity, dict) and baseline_identity:
+            mismatch = [
+                key
+                for key in CONFIGURATION_DIMENSIONS
+                if current_identity.get(key) != baseline_identity.get(key)
+            ]
+            if mismatch:
+                raise NoSuchRun("baseline identity differs in: " + ", ".join(mismatch))
     delta, before_id = _compare_baselines(source, profile, chosen, after)
     if delta.digest_changed:
         # Say WHICH declaration moved. One tightened line can account for every case that
@@ -138,6 +171,11 @@ def _compare_run(
             local.read_text(encoding="utf-8") if local.is_file() else None,
         )
 
+    # Configuration-compatible runs may still differ in provenance or the profile itself.
+    # Keep those differences visible in standalone comparisons as well as job comparisons.
+    before_identity = read_identity(source, profile, before_id)
+    notes = _identity_notes(before_identity, current_identity)
+
     # The finishing run's stack from its own outcome, or from its exchanges when the outcome
     # was written by a llmdv that did not record one.
     local_stack = (outcome.read(run_dir) or {}).get("stack") or stack_from_run(run_dir)
@@ -145,7 +183,9 @@ def _compare_run(
 
     after_id = _run_id(after)
     text = render(delta, profile, before_id, after_id or run_dir.name)
-    data = as_record(delta, before_id, after_id or run_dir.name)
+    if notes:
+        text += "\nNotes:\n" + "\n".join(f"  • {note}" for note in notes)
+    data = as_record(delta, before_id, after_id or run_dir.name, current_identity, notes)
     _save_comparison(run_dir, source, profile, text, data, after_id)
     log.info("compared against %s", before_id)
     return (TEST_FAILURES if delta.regressed else OK), text
@@ -234,9 +274,42 @@ def run(args: argparse.Namespace) -> int:
         return OK
 
     try:
-        before_id, after_id = pick_pair(runs, args.baseline)
+        if args.baseline:
+            before_id, after_id = pick_pair(runs, args.baseline)
+        else:
+            after_id = runs[-1] if runs else None
+            after_identity = (
+                read_identity(args.source, args.profile, after_id) if after_id else None
+            )
+            if not after_identity:
+                raise NoSuchRun("latest run has no identity; name an older run explicitly")
+            compatible = [
+                run_id
+                for run_id in runs[:-1]
+                if (candidate := read_identity(args.source, args.profile, run_id))
+                and all(
+                    candidate.get(key) == after_identity.get(key)
+                    for key in CONFIGURATION_DIMENSIONS
+                )
+            ]
+            if not compatible:
+                raise NoSuchRun("no earlier run has the latest run's configuration identity")
+            before_id, after_id = compatible[-1], after_id
         after = require_records(read_results(args.source, args.profile, after_id), after_id)
         chosen = pick_window(runs, exclude=after_id, baseline=args.baseline, size=args.window)
+        if not args.baseline:
+            chosen = compatible[-max(1, args.window) :]
+        if args.baseline:
+            before_identity = read_identity(args.source, args.profile, before_id)
+            after_identity = read_identity(args.source, args.profile, after_id)
+            if before_identity and after_identity:
+                mismatch = [
+                    key
+                    for key in CONFIGURATION_DIMENSIONS
+                    if before_identity.get(key) != after_identity.get(key)
+                ]
+                if mismatch:
+                    raise NoSuchRun("baseline identity differs in: " + ", ".join(mismatch))
         delta, before_id = _compare_baselines(args.source, args.profile, chosen, after)
     except (NoSuchRun, EmptyRun, InvalidRun, UnsafeName) as exc:
         # Not having a comparison is a usage answer, never a passing one.
@@ -247,20 +320,33 @@ def run(args: argparse.Namespace) -> int:
         log.error("%s", exc)
         return PREFLIGHT
 
-    if delta.digest_changed:
-        delta.profile_diff = declaration_diff(
-            read_profile(args.source, args.profile, before_id),
-            read_profile(args.source, args.profile, after_id),
+    try:
+        if delta.digest_changed:
+            delta.profile_diff = declaration_diff(
+                read_profile(args.source, args.profile, before_id),
+                read_profile(args.source, args.profile, after_id),
+            )
+        attach_stack(
+            delta,
+            read_stack(args.source, args.profile, before_id),
+            read_stack(args.source, args.profile, after_id),
         )
-    attach_stack(
-        delta,
-        read_stack(args.source, args.profile, before_id),
-        read_stack(args.source, args.profile, after_id),
-    )
+
+        notes = _identity_notes(
+            read_identity(args.source, args.profile, before_id),
+            read_identity(args.source, args.profile, after_id),
+        )
+    except ArchiveUnreadable as exc:
+        log.error("%s", exc)
+        return PREFLIGHT
 
     emit("")
     for line in render(delta, args.profile, before_id, after_id).splitlines():
         emit(f"  {line}")
+    if notes:
+        emit("  Notes:")
+        for note in notes:
+            emit(f"    • {note}")
     emit("")
 
     if delta.regressed and not args.no_fail:

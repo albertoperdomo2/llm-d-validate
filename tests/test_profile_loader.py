@@ -49,6 +49,50 @@ def test_minimal_profile_loads_clean(tmp_path):
     assert [d for d in loader.validate(profile) if d.level == "error"] == []
 
 
+def test_ingress_role_implementation_loads_for_identity(tmp_path):
+    profile = loader.load(
+        write(
+            tmp_path,
+            MINIMAL.replace(
+                "  - id: direct\n",
+                "  - id: direct\n    role: engine\n    implementation: vllm\n",
+            ),
+        )
+    )
+    ingress = profile.ingress("direct")
+    assert (ingress.role, ingress.implementation) == ("engine", "vllm")
+
+
+def test_ingress_role_rejects_typos(tmp_path):
+    with pytest.raises(loader.ProfileError, match="role"):
+        loader.load(
+            write(
+                tmp_path,
+                MINIMAL.replace(
+                    "  - id: direct\n",
+                    "  - id: direct\n    role: engnie\n    implementation: vllm\n",
+                ),
+            )
+        )
+
+
+def test_ingress_role_rejects_duplicate_sources(tmp_path):
+    profile = loader.load(
+        write(
+            tmp_path,
+            MINIMAL.replace(
+                "name: unit",
+                "name: unit\nengine: legacy",
+            ).replace(
+                "  - id: direct\n",
+                "  - id: direct\n    role: engine\n    implementation: vllm\n",
+            ),
+        )
+    )
+    errors = [item for item in loader.validate(profile) if item.level == "error"]
+    assert any("not both engine and ingress" in item.message for item in errors)
+
+
 def test_negative_context_length_is_an_invalid_profile(tmp_path):
     profile = loader.load(
         write(

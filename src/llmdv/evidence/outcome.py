@@ -36,6 +36,7 @@ def now() -> str:
 class Outcome:
     run_id: str
     labels: dict[str, str] = field(default_factory=dict)
+    identity: dict[str, Any] = field(default_factory=dict)
     started: str = field(default_factory=now)
     finished: str | None = None
     profile: dict[str, str | None] = field(default_factory=dict)

@@ -28,7 +28,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .. import __version__, preflight
+from .. import __version__, identity, preflight
 from ..collect import KubectlLogCollector, NoopCollector
 from ..evidence import dashboard, reproduce
 from ..evidence.outcome import Outcome, connection_lost, environment_only, known_summary, now
@@ -98,8 +98,15 @@ def add_parser(subparsers, parents) -> None:
         action="append",
         default=[],
         metavar="KEY=VALUE",
-        help="record a label in env.json and outcome.json, e.g. trigger=nightly or "
-        "rollout=<id> (repeatable; a later key overrides an earlier one)",
+        help="record a free-form label in env.json and outcome.json, e.g. rollout=<id> "
+        "(repeatable; a later key overrides an earlier one)",
+    )
+    verify.add_argument(
+        "--identity",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="declare a lane identity dimension or profile assertion (repeatable key=value)",
     )
     verify.add_argument(
         "--transcript-cap",
@@ -257,6 +264,11 @@ def _verify(args: argparse.Namespace, run: _Run) -> int:
         )
         return USAGE
 
+    try:
+        lane_identity = identity.parse(args.identity)
+    except identity.IdentityError as exc:
+        log.error("%s", exc)
+        return USAGE
     labels, bad_labels = _parse_labels(args.label)
     run.outcome.labels = labels
     for message in bad_labels:
@@ -270,6 +282,14 @@ def _verify(args: argparse.Namespace, run: _Run) -> int:
         log.error("%s", exc)
         return USAGE
     run.outcome.profile["name"] = profile.name
+    run.outcome.identity = identity.build(
+        profile, lane_identity, loader.contract_digest(args.profile)
+    )
+    try:
+        identity.validate_lane(lane_identity, run.outcome.identity)
+    except identity.IdentityError as exc:
+        log.error("%s", exc)
+        return USAGE
     run.outcome.topology = profile.topology().as_record()
     run.outcome.write(run_dir)
 
@@ -486,6 +506,9 @@ def _parse_labels(values: list[str]) -> tuple[dict[str, str], list[str]]:
         key, sep, val = value.partition("=")
         if not sep or not _LABEL_KEY.fullmatch(key):
             problems.append(f"--label {value!r} must be key=value, with a key of [A-Za-z0-9_.-]")
+            continue
+        if key in identity.RESERVED_LABELS:
+            problems.append(f"label key {key!r} is reserved for run identity; use --identity")
             continue
         labels[key] = val
     return labels, problems

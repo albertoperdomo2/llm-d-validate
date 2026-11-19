@@ -15,7 +15,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ..compare.archive import NIGHTLY_TRIGGER, publish_one
+from ..compare.archive import publish_one
 from ..evidence import alerts, dashboard, outcome
 from ..log.setup import emit, get_logger
 from ..output.remote import PublicationStatus, UnsupportedRemote, parse_remote_uri
@@ -56,6 +56,13 @@ def add_parser(subparsers, parents) -> None:
         default=os.environ.get("LLMDV_FALLBACK_URI") or None,
         help="file:///path (e.g. a mounted PVC) used only when --remote-output is unavailable "
         "(env LLMDV_FALLBACK_URI)",
+    )
+    command.add_argument(
+        "--identity",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="lane identity key=value (repeatable); trigger defaults to manual",
     )
     command.add_argument(
         "--work-dir",
@@ -334,7 +341,7 @@ def _verify(args: argparse.Namespace, run_dir: Path, passthrough: list[str]) -> 
         *(["--kubeconfig", str(args.kubeconfig)] if args.kubeconfig else []),
         *(["--context", args.context] if args.context else []),
         *(["--kube-cli", args.kube_cli] if getattr(args, "kube_cli", None) is not None else []),
-        "--label", f"trigger={NIGHTLY_TRIGGER}",
+        *sum((["--identity", value] for value in getattr(args, "identity", [])), []),
         *passthrough,
     ]  # fmt: skip
     child = subprocess.Popen(command)  # noqa: S603 -- our own interpreter and CLI

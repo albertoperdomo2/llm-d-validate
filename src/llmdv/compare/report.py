@@ -19,13 +19,21 @@ COMPARISON_JSON = "comparison.json"
 COMPARISON_SCHEMA = "llmdv.comparison/1"
 
 
-def as_record(delta: Delta, before_id: str, after_id: str) -> dict:
+def as_record(
+    delta: Delta,
+    before_id: str,
+    after_id: str,
+    identity: dict | None = None,
+    notes: list[str] | None = None,
+) -> dict:
     """The comparison as data: which run it was made against, and each decided case's verdict."""
     return {
         "schema": COMPARISON_SCHEMA,
         "made": True,
         "baseline": before_id,
         "run": after_id,
+        "identity": identity or {},
+        "notes": notes or [],
         "window": delta.window,
         "window_dropped": delta.window_dropped,
         "profile_changed": delta.digest_changed,
@@ -51,9 +59,14 @@ def as_record(delta: Delta, before_id: str, after_id: str) -> dict:
     }
 
 
-def not_made(reason: str) -> dict:
+def not_made(reason: str, identity: dict | None = None) -> dict:
     """A comparison that could not be made. Not the same as one that found nothing."""
-    return {"schema": COMPARISON_SCHEMA, "made": False, "reason": reason}
+    return {
+        "schema": COMPARISON_SCHEMA,
+        "made": False,
+        "reason": reason,
+        "identity": identity or {},
+    }
 
 
 def _bullets(names: list[str], cap: int = CAP) -> list[str]:

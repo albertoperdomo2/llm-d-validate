@@ -22,7 +22,7 @@
 #   #   export LLMDV_EPP_URL=http://localhost:18080
 #   llmdv profile validate profiles/llm-d/optimized-baseline/vllm-qwen3-32b-parsers-standalone.yaml
 #   llmdv verify --profile profiles/llm-d/optimized-baseline/vllm-qwen3-32b-parsers-standalone.yaml \
-#     --label overlay=<ACCELERATOR_TYPE>/<MODEL_SERVER>/<INFRA_PROVIDER>
+#     --identity accelerator=<ACCELERATOR_TYPE> --identity provider=<INFRA_PROVIDER>
 
 extends:
   - ../parts/base.yaml

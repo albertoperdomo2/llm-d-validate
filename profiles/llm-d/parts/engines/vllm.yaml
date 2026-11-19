@@ -9,6 +9,7 @@
 # config does not state). They share vLLM's OpenAI-compatible server, so they share its request
 # vocabulary; an older or forked build that lacks an extension fails that field's case, which is
 # the measurement.
+
 #
 # Not declared here, and why:
 #   the engine ingress          llmdv reaches each replica only by a URL, and a committed profile
@@ -16,6 +17,8 @@
 #                               When it lands it is `kind: vllm`
 #   tools.strict_level          vLLM's --tool-strict-level; no overlay passes it, so the default
 #                               (`auto`, the schema default) applies and nothing is declared
+
+engine: vllm
 
 capabilities:
   # INTENT: every vLLM extension field of the Chat API is accepted.

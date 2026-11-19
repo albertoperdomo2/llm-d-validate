@@ -12,10 +12,10 @@ Deploy the guide with an overlay a combination covers (its header lists them), g
 export LLMDV_EPP_URL=http://<GUIDE_NAME>-epp.<namespace>.svc.cluster.local   # standalone mode
 llmdv profile validate profiles/llm-d/optimized-baseline/vllm-qwen3-32b-parsers-standalone.yaml
 llmdv verify --profile profiles/llm-d/optimized-baseline/vllm-qwen3-32b-parsers-standalone.yaml \
-  --label overlay=gpu/vllm/gke
+  --identity accelerator=gpu --identity provider=gke
 ```
 
-Any address that reaches the EPP works: a route, the Service's address from inside the cluster, or a port-forward you run yourself. Pass the overlay as `--label`: one combination covers several overlays, and the labels keep their runs apart.
+Any address that reaches the EPP works: a route, the Service's address from inside the cluster, or a port-forward you run yourself. Pass the lane's accelerator and provider with `--identity`: one combination covers several overlays, and identity dimensions keep their runs apart.
 
 ## Layout: a sum, not a product
 
@@ -88,7 +88,7 @@ These profiles follow llm-d's CI: there is one for every configuration the guide
 
 Three lanes set no provider. They apply the accelerator and engine folder's own kustomization, which includes only `base`, so they deploy what the `base` overlay does.
 
-Lanes share a profile when the overlays they deploy give a client the same model, context window, parsers and engine: a provider overlay changes only node, cache and NCCL settings. Pass the lane or overlay as `--label` to keep their runs apart. `sim-qwen3-32b-standalone` is not a lane: it runs the guide's router in front of llm-d-inference-sim, for kind or CI without accelerators.
+Lanes share a profile when the overlays they deploy give a client the same model, context window, parsers and engine: a provider overlay changes only node, cache and NCCL settings. Pass the lane's accelerator and provider with `--identity` to keep their runs apart. `sim-qwen3-32b-standalone` is not a lane: it runs the guide's router in front of llm-d-inference-sim, for kind or CI without accelerators.
 
 **Not covered, because no lane runs them:** the community overlays (TPU v6e and v7, TPU v7 dynamic slicing, Rebellions NPU, CPU, Iluvatar, MetaX, Biren, Moore Threads, TensorRT-LLM, and SGLang on Intel XPU), gateway mode, and agentgateway as the standalone sidecar proxy. Each follows the same pattern, a model part and a few-line combination, and is added when a lane runs it.
 

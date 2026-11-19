@@ -87,6 +87,7 @@ from .schema import (
     FleetPolicy,
     Ingress,
     IngressKind,
+    IngressRole,
     KnownFailure,
     LogSource,
     Model,
@@ -231,6 +232,8 @@ def _diagnostics(profile: Profile) -> list[Diagnostic]:
     seen: set[str] = set()
     for index, ingress in enumerate(profile.ingresses):
         at = f"ingresses[{index}]({ingress.id})"
+        if ingress.role is not None and ingress.implementation is None:
+            out.append(Diagnostic("error", f"{at}.implementation", "required when role is set"))
         if ingress.id in seen:
             out.append(Diagnostic("error", at, f"duplicate ingress id {ingress.id!r}"))
         seen.add(ingress.id)
@@ -333,6 +336,20 @@ def _diagnostics(profile: Profile) -> list[Diagnostic]:
                 out.append(Diagnostic("error", req_at, "needs either target or selector"))
             if requirement.kind == "port_forward" and not requirement.local_port:
                 out.append(Diagnostic("error", req_at, "port_forward needs local_port"))
+
+    for role, legacy in (("engine", profile.engine), ("gateway", profile.gateway)):
+        layers = [item for item in profile.ingresses if item.role and item.role.value == role]
+        if len(layers) > 1:
+            out.append(Diagnostic("error", "ingresses", f"only one {role} role is allowed"))
+        if layers and legacy is not None:
+            out.append(
+                Diagnostic(
+                    "error",
+                    role,
+                    f"declare {role} implementation on its role ingress, not both {role} "
+                    "and ingress",
+                )
+            )
 
     # Cross-section consistency. A client needing a surface no ingress exposes is dead
     # config: it can never run, and nothing at runtime notices.
@@ -474,6 +491,9 @@ def _build(raw: dict[str, Any], path: Path, clients_dir: Path) -> Profile:
             **_each(
                 schema=lambda: str(raw.get("schema", SUPPORTED_SCHEMA)),
                 name=lambda: str(raw.get("name") or path.stem),
+                guide=lambda: _opt_str(raw.get("guide")),
+                engine=lambda: _opt_str(raw.get("engine")),
+                gateway=lambda: _opt_str(raw.get("gateway")),
                 vantage=lambda: _enum(Vantage, raw.get("vantage"), Vantage.EXTERNAL, "vantage"),
                 environment=lambda: _environment(_block(raw.get("environment"), "environment")),
                 model=inherited("model", _model),
@@ -833,6 +853,8 @@ def _ingress(
             ),
             kind=lambda: _enum(IngressKind, raw.get("kind"), IngressKind.VLLM, f"{at}.kind"),
             base_url=lambda: _base_url(raw, at),
+            role=lambda: _enum(IngressRole, raw.get("role"), None, f"{at}.role"),
+            implementation=lambda: _opt_str(raw.get("implementation")),
             base_url_env=lambda: _opt_str(raw.get("base_url_env")),
             auth=lambda: _auth(_block(raw.get("auth"), f"{at}.auth"), f"{at}.auth"),
             health_path=lambda: str(raw.get("health_path") or "/health"),

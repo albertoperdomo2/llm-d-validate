@@ -144,7 +144,7 @@ def _archive(tmp_path, runs: dict[str, dict]):
             json.dumps({"case_id": "a", "outcome": "pass", "ingress": "litellm"})
         )
         (d / "outcome.json").write_text(
-            json.dumps({"labels": {"trigger": "nightly"}, "stack": stack})
+            json.dumps({"identity": {"trigger": "nightly"}, "stack": stack})
         )
         manifest.write(d)
     return f"file://{tmp_path}"
