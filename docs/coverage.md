@@ -27,7 +27,7 @@ the cases against it (see [docs/end-to-end.md](end-to-end.md)).
 | OpenAI Completions (`openai_completions`) | 17 | Prompt-based completions, fields, limits, logprobs | `completions`; `completions_fields` | built |
 | OpenAI Responses (`openai_responses`) | 27 | Basic, streaming, tools, stored state, cancellation, options | `responses`; `responses_options`, `responses_features`, `stateful_responses` | built |
 | Anthropic Messages (`anthropic_messages`) | 37 | Messages, event order, thinking, streamed thinking and effort, count_tokens, content drops | `messages`; `messages_checks`, `messages_thinking`, `messages_efforts`, `count_tokens` | built |
-| Tool calling (`tools`) | 63 | Tool calls, streamed arguments, parallel calls, results, loops; no declared call markup in any answer on a tool surface | `model.tools.parser`, `model.tools.auto_choice`, `model.tools.markup` | built |
+| Tool calling (`tools`) | 64 | Tool calls, streamed arguments, parallel calls, results, loops; no declared call markup in any answer on a tool surface | `model.tools.parser`, `model.tools.auto_choice`, `model.tools.markup` | built |
 | Streaming (`streaming`) | 13 | SSE framing, terminal events, `[DONE]` in the model's text, timing, disconnect then recover | streaming surfaces; `transport.stream_budget` | built |
 | Field options (`field_options`) | 8 | Structured output, JSON mode (with reasoning beside the answer where it is on by default), reasoning usage, observable vLLM options, the effort marker the template renders for each requested effort | `structured_output`, `json_object`, `model.reasoning`, `reasoning_tokens`, `vllm_options`, `effort_rendering` | built |
 | Image input (`images`) | 8 | An image is read, not only accepted: streamed, 2.4 MB, two in order, counted by `count_tokens`; an internal image URL is refused | `vision`; `count_tokens`, `error_status.internal_image_url` | built |
@@ -41,7 +41,7 @@ the cases against it (see [docs/end-to-end.md](end-to-end.md)).
 | Client scenarios (`scenarios`) | 6 | Client-shaped multi-request patterns: blank turns, cancel bursts, aliases | `scenario_checks`, `client_model_names`, `chat_quiet_efforts` | built |
 | Real clients (`real_clients`) | 9 | Pinned Claude Code sessions through the declared chain | `clients[].binaries`, `client_sessions`, `client_reuse` | built |
 | Fleet invariants (`fleet`) | 10 | Config reads, Prometheus bounds, forbidden log lines | `fleet.config`, `fleet.metrics`, `ingresses[].logs` | built |
-| **Total** | **368** | | | |
+| **Total** | **369** | | | |
 
 Keys without a prefix live under `capabilities`, either at the top level or per ingress; see
 [profiles/REFERENCE.md](../profiles/REFERENCE.md#capabilities). Surfaces and transport, logs and

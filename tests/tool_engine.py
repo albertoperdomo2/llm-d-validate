@@ -29,6 +29,8 @@ DEFECTS = frozenset(
         "truncated_as_call",  # a call cut by the token limit is reported as a finished call
         "rejects_text_beside_calls",  # assistant text beside replayed calls is refused
         "drops_trailing_text",  # user text after a result never reaches the model
+        "rejects_additional_tools",  # an additional_tools input item is refused with a 400
+        "drops_additional_tools",  # tools in an additional_tools input item never reach the model
         "drops_result_blocks",  # search_result and document blocks in a result are dropped
         "accepts_orphans",  # serves a result whose call id names no issued call
         "allowed_5xx",  # allowed_tools fails with a server error
@@ -159,6 +161,8 @@ def handles(path: str, body: dict) -> bool:
         return bool(body.get("tools") or _user_images("messages", body))
     if path not in PATHS:
         return False
+    if path == "/v1/responses" and _additional_tools(body):
+        return True
     legacy = path == "/v1/chat/completions" and "functions" in body
     if body.get("tools") or legacy or _history(PATHS[path], body).calls:
         return True
@@ -185,6 +189,11 @@ def serve(
             counted = {key: value for key, value in body.items() if key != "tools"}
         return 200, {"input_tokens": len(json.dumps(counted).split())}, None
     api = PATHS[path]
+    if api == "responses" and _additional_tools(body):
+        if defect == "rejects_additional_tools":
+            message = "Unsupported input item type: additional_tools"
+            return 400, {"error": {"message": message, "type": "invalid_request_error"}}, None
+        body = _hoist_additional_tools(body, defect)
     outcome = _turn(api, body, defect)
     if isinstance(outcome, tuple):
         status, message = outcome
@@ -216,6 +225,28 @@ def serve(
 
 
 # ---------------------------------------------------------------------------- reading a request
+
+
+def _additional_tools(body: dict) -> list[dict]:
+    items = body.get("input")
+    if not isinstance(items, list):
+        return []
+    return [i for i in items if isinstance(i, dict) and i.get("type") == "additional_tools"]
+
+
+def _hoist_additional_tools(body: dict, defect: str | None) -> dict:
+    """The tools of every additional_tools item join `tools`, as an engine renders them; the
+    items leave the input. `drops_additional_tools` removes the items and keeps their tools out.
+    """
+    added = [tool for item in _additional_tools(body) for tool in item.get("tools") or []]
+    rest = [item for item in body["input"] if item not in _additional_tools(body)]
+    tools = list(body.get("tools") or [])
+    if defect != "drops_additional_tools":
+        tools += added
+    if not tools:
+        # With no tools offered at all, the model answers in text.
+        return {**body, "input": rest, "tool_choice": "none"}
+    return {**body, "input": rest, "tools": tools}
 
 
 def _function(api: str, tool: Any) -> Function | None:

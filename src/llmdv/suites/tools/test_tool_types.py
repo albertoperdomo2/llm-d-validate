@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+from ...evidence import journal
 from ...surfaces.tool_wire import SERVER_TOOLS, ToolChoice, ToolDef
 from ..conftest import check_completion, check_sse_response
 from .common import (
@@ -16,6 +17,8 @@ from .common import (
     WEATHER,
     check_call_turn,
     check_refusal,
+    fresh,
+    post_tools,
     served_or_refused,
     tool_budget,
     wire,
@@ -69,6 +72,38 @@ def test_namespace(client, surface, model, ingress):
     exchange = client.post(surface.path, json_body=body)
     if served_or_refused(exchange, surface, ingress):
         check_completion(surface.parse_completion(exchange.response_body), surface, model)
+
+
+@pytest.mark.surface("responses")
+@pytest.mark.case_id("tools.additional_tools")
+def test_additional_tools_item(client, surface, model, ingress):
+    """Tools offered only through an `additional_tools` input item, as Codex sends them, reach
+    the model: a required choice calls one. Declared `accepted`, a refusal fails; undeclared, a
+    4xx refusal passes, but a served turn without the call fails, because the item was dropped.
+    """
+    disposition = ingress.capabilities.responses_features.get("additional_tools")
+    journal.record("feature_disposition", disposition or "undeclared", "additional_tools")
+    body = wire(surface).request(
+        model.public_id, "Hello there.", [WEATHER], REQUIRED, tool_budget(model)
+    )
+    prior = body["input"]
+    # Codex sends an item id; some engines parse the item differently with and without one.
+    item = {"type": "additional_tools", "id": f"at_{fresh('llmdv')}", "role": "developer"}
+    body["input"] = [
+        {**item, "tools": body.pop("tools")},
+        *([{"role": "user", "content": prior}] if isinstance(prior, str) else prior),
+    ]
+    if disposition == "accepted":
+        completion = post_tools(client, surface, ingress, body)
+    else:
+        exchange = client.post(surface.path, json_body=body)
+        if not served_or_refused(exchange, surface, ingress):
+            return
+        completion = surface.parse_completion(exchange.response_body)
+        if disposition == "ignored":
+            check_completion(completion, surface, model)
+            return
+    check_call_turn(completion, surface, model, [WEATHER], REQUIRED, names=["get_weather"])
 
 
 EXAMPLES = ToolDef(
