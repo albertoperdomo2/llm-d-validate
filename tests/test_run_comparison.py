@@ -159,7 +159,7 @@ from llmdv.output import manifest  # noqa: E402
 from tests.fakes import run_llmdv  # noqa: E402
 
 
-def archive(tmp_path, profile="p", runs=None, triggers=None):
+def archive(tmp_path, profile="p", runs=None, triggers=None, accelerators=None):
     """A published-run layout: <root>/<profile>/<run-id>/results.jsonl."""
     for run_id, records in (runs or {}).items():
         d = tmp_path / profile / run_id
@@ -170,7 +170,7 @@ def archive(tmp_path, profile="p", runs=None, triggers=None):
         if trigger is not None:
             body["identity"] = {
                 "guide": "g",
-                "accelerator": "amd",
+                "accelerator": (accelerators or {}).get(run_id, "amd"),
                 "engine": "vllm",
                 "provider": "p",
                 "gateway": None,
@@ -449,6 +449,39 @@ def test_standalone_compare_reports_provenance_notes(tmp_path, capsys):
         )
     assert main(["compare", "--from", uri, "--profile", "p"]) == 0
     assert "identity llm_d_ref: 'old' -> 'new'" in capsys.readouterr().out
+
+
+def test_standalone_compare_keeps_accelerator_lanes_separate(tmp_path):
+    uri = archive(
+        tmp_path / "archive",
+        runs={
+            "r1": [rec("a", "fail")],
+            "r2": [rec("a", "pass")],
+            "r3": [rec("a", "fail")],
+        },
+        accelerators={"r2": "tpu"},
+    )
+    assert main(["compare", "--from", uri, "--profile", "p"]) == 0
+
+
+def test_standalone_compare_refuses_a_mismatched_explicit_baseline(tmp_path, capsys):
+    uri = archive(
+        tmp_path / "archive",
+        runs={"r1": [rec("a", "pass")], "r2": [rec("a", "pass")]},
+        accelerators={"r2": "tpu"},
+    )
+    assert main(["compare", "--from", uri, "--profile", "p", "--baseline", "r1"]) == 2
+    assert "accelerator" in capsys.readouterr().err
+
+
+def test_standalone_compare_does_not_auto_pick_an_identityless_run(tmp_path):
+    uri = archive(
+        tmp_path / "archive",
+        runs={"r1": [rec("a", "pass")], "r2": [rec("a", "pass")]},
+        triggers={"r1": None},
+    )
+    assert main(["compare", "--from", uri, "--profile", "p"]) == 2
+    assert main(["compare", "--from", uri, "--profile", "p", "--baseline", "r1"]) == 0
 
 
 def test_a_window_counts_only_nightly_runs(tmp_path):

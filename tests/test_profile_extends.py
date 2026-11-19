@@ -441,7 +441,8 @@ def test_an_unknown_top_level_key_in_a_parent_names_the_parent(tmp_path):
 def test_the_known_top_level_keys_are_the_profile_s_fields_and_extends():
     """One list: what REFERENCE.md documents (test_profile_reference.py) is what loads."""
     assert set(loader.TOP_LEVEL_KEYS) == {
-        "schema", "name", "vantage", "environment", "model", "ingresses", "capabilities",
+        "schema", "name", "vantage", "environment", "guide", "engine", "gateway", "model",
+        "ingresses", "capabilities",
         "headers", "clients", "fleet_policy", "fleet", "known_failures", "extends",
     }  # fmt: skip
 
