@@ -255,7 +255,7 @@ def test_missing_cli_warns_once_for_environment(tmp_path, monkeypatch, coordinat
     monkeypatch.setenv("PATH", "")
     monkeypatch.setattr(preflight, "reachable", lambda ingress: (True, 1.0))
     # No fleet stands behind the stub, so its model list cannot be read either.
-    monkeypatch.setattr(preflight, "_check_access", lambda report, ingress: None)
+    monkeypatch.setattr(preflight, "_check_access", lambda *args: None)
     report = preflight.run(loader.load(path), kube=KubeContext())
     assert report.ok
     assert len(report.warnings) == 1
@@ -271,7 +271,7 @@ def test_endpoint_only_profile_needs_no_cluster_cli(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", "")
     monkeypatch.setattr(preflight, "reachable", lambda ingress: (True, 1.0))
     # No fleet stands behind the stub, so its model list cannot be read either.
-    monkeypatch.setattr(preflight, "_check_access", lambda report, ingress: None)
+    monkeypatch.setattr(preflight, "_check_access", lambda *args: None)
     report = preflight.run(loader.load(path), kube=KubeContext())
     assert report.ok
     assert not report.warnings
@@ -308,7 +308,8 @@ def test_unavailable_cli_is_reported_and_required_logs_still_fail(tmp_path, mode
     reason = "requested cluster CLI 'oc'" if override else NO_CLI_REASON
     assert reason in result.stderr
     assert "cluster lookups are skipped" in result.stderr
-    assert result.stderr.count("warning: preflight:") == 1
+    # The environment warning and the profile context-window warning are both expected.
+    assert result.stderr.count("warning: preflight:") == 2
     env = json.loads((out / "env.json").read_text())
     assert env["kube_cli"] is None
     assert env["kube_cli_requested"] == ("oc" if override else None)
@@ -436,7 +437,7 @@ def test_log_collection_reuses_the_preflight_reason(tmp_path, monkeypatch, cli):
     monkeypatch.setenv("PATH", "")
     monkeypatch.setattr(preflight, "reachable", lambda ingress: (True, 1.0))
     # No fleet stands behind the stub, so its model list cannot be read either.
-    monkeypatch.setattr(preflight, "_check_access", lambda report, ingress: None)
+    monkeypatch.setattr(preflight, "_check_access", lambda *args: None)
     profile = selector_profile(tmp_path)
     kube = KubeContext(cli=cli)
     report = preflight.run(profile, kube=kube)

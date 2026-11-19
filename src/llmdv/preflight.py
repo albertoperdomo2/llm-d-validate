@@ -34,6 +34,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
+from .http import redact
 from .http.client import RecordingClient
 from .http.redact import scrub
 from .kube import NO_CLI_REASON, KubeContext, KubeError
@@ -126,6 +127,13 @@ def run(
     """Check everything needed before the first test. Never mutates anything."""
     report = Report()
     selected = ingress_ids or list(profile.ingress_ids)
+    # Preflight sends authenticated requests before pytest's plugin has a chance to register
+    # the profile secrets. Register them here so a response that echoes a key cannot reach a
+    # log or any evidence produced while preflight is running.
+    secrets = [
+        secret for ingress_id in selected if (secret := resolve_secret(profile.ingress(ingress_id)))
+    ]
+    redact.install_secrets(secrets)
 
     for uri, area in ((remote_output, "output"), (artifact_sink, "artifact_sink")):
         if not uri:
@@ -514,10 +522,13 @@ def _check_declared_apis(report: Report, ingress: Ingress, ingress_index: int) -
                 if exchange.transport_error
                 else f"HTTP {exchange.status}"
             )
+            # Auth-protected endpoints can reject a valid probe while the model-list check has
+            # already established that the credential reaches the deployment. That proves the
+            # route exists, but not whether this particular endpoint permits the probe.
             inconclusive = (
                 exchange.transport_error
                 or exchange.status is None
-                or exchange.status == 429
+                or exchange.status in (401, 403, 429)
                 or 500 <= exchange.status < 600
             )
             if inconclusive:
