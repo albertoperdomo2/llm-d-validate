@@ -367,6 +367,10 @@ class Ingress:
     # Fully resolved by the loader, including inherited profile defaults.
     model: Model
     capabilities: Capabilities
+    # The role and implementation identify this layer for run identity. They are optional so
+    # older profiles can continue using the profile-level compatibility fields.
+    role: str | None = None
+    implementation: str | None = None
     auth: Auth = field(default_factory=Auth)
     # The environment variable that holds `base_url`, for a profile that is committed: a real
     # gateway hostname is cluster-identifiable and stays out of the repository, like the key.

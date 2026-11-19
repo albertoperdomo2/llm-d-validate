@@ -836,6 +836,8 @@ def _ingress(
             ),
             kind=lambda: _enum(IngressKind, raw.get("kind"), IngressKind.VLLM, f"{at}.kind"),
             base_url=lambda: _base_url(raw, at),
+            role=lambda: _opt_str(raw.get("role")),
+            implementation=lambda: _opt_str(raw.get("implementation")),
             base_url_env=lambda: _opt_str(raw.get("base_url_env")),
             auth=lambda: _auth(_block(raw.get("auth"), f"{at}.auth"), f"{at}.auth"),
             health_path=lambda: str(raw.get("health_path") or "/health"),

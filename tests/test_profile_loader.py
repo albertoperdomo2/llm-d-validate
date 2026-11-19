@@ -49,6 +49,20 @@ def test_minimal_profile_loads_clean(tmp_path):
     assert [d for d in loader.validate(profile) if d.level == "error"] == []
 
 
+def test_ingress_role_implementation_loads_for_identity(tmp_path):
+    profile = loader.load(
+        write(
+            tmp_path,
+            MINIMAL.replace(
+                "  - id: direct\n",
+                "  - id: direct\n    role: engine\n    implementation: vllm\n",
+            ),
+        )
+    )
+    ingress = profile.ingress("direct")
+    assert (ingress.role, ingress.implementation) == ("engine", "vllm")
+
+
 def test_negative_context_length_is_an_invalid_profile(tmp_path):
     profile = loader.load(
         write(
