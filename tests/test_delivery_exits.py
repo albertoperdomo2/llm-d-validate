@@ -279,9 +279,10 @@ def test_compare_reports_a_rejected_or_unreachable_iam_as_the_environment():
         assert FakeIAM.api_key not in done.stdout + done.stderr
 
 
-def test_compare_reports_a_store_that_lists_but_refuses_reads_as_the_environment(tmp_path):
+@pytest.mark.parametrize("denied", ["/results.jsonl", "/outcome.json"])
+def test_compare_reports_a_store_that_lists_but_refuses_reads_as_the_environment(tmp_path, denied):
     pytest.importorskip("boto3", reason="the s3 extra is not installed")
-    with FakeS3(deny_get=("/results.jsonl",), deny_message="denied for llmdv-test") as store:
+    with FakeS3(deny_get=(denied,), deny_message="denied for llmdv-test") as store:
         for run_id in ("r1", "r2"):
             for name in ("results.jsonl", manifest.FILENAME):
                 store.objects[f"results/n/p/{run_id}/{name}"] = (
@@ -292,7 +293,7 @@ def test_compare_reports_a_store_that_lists_but_refuses_reads_as_the_environment
             ).encode()
         done = run_llmdv("compare", "--from", "s3://results/n", "--profile", "p", env=s3_env(store))
     assert done.returncode == PREFLIGHT, done.stderr
-    assert "p/r2/results.jsonl" in done.stderr
+    assert f"p/r2/{denied[1:]}" in done.stderr
     assert "llmdv-test" not in done.stderr.replace("llmdv-test-secret", "")
 
 

@@ -147,9 +147,11 @@ import pytest  # noqa: E402
 
 from llmdv.cli.main import main  # noqa: E402
 from llmdv.compare.archive import (  # noqa: E402
+    ArchiveUnreadable,
     NoSuchRun,
     list_runs,
     pick_pair,
+    read_outcome,
     read_results,
 )
 from llmdv.output import manifest  # noqa: E402
@@ -201,6 +203,13 @@ def test_a_directory_without_results_is_not_a_run(tmp_path):
 def test_results_are_read_back_as_records(tmp_path):
     uri = archive(tmp_path, runs={"r1": [rec("a", "pass")]})
     assert read_results(uri, "p", "r1")[0]["case_id"] == "a"
+
+
+def test_a_present_but_unreadable_outcome_is_an_archive_error(tmp_path):
+    archive(tmp_path, runs={"r1": [rec("a", "pass")]})
+    (tmp_path / "p" / "r1" / "outcome.json").write_bytes(b"not utf-8: \xff")
+    with pytest.raises(ArchiveUnreadable, match="read .+outcome.json"):
+        read_outcome(f"file://{tmp_path}", "p", "r1")
 
 
 def test_reading_a_missing_run_says_which_one(tmp_path):

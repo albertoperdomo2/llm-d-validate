@@ -85,6 +85,24 @@ def test_a_profile_identity_assertion_mismatch_exits_two(tmp_path):
     assert result.returncode == 2
 
 
+def test_identity_dimensions_are_reserved_from_labels(tmp_path):
+    with FakeFleet() as fleet:
+        profile = write_profile(tmp_path, fleet)
+        result = run_llmdv(
+            "verify",
+            "--profile",
+            str(profile),
+            "--local-output",
+            str(tmp_path / "run"),
+            "--label",
+            "trigger=nightly",
+            "--pod-logs",
+            "off",
+        )
+    assert result.returncode == 2
+    assert "reserved for run identity" in result.stderr
+
+
 def test_a_fleet_failure_is_recorded_with_the_failing_case(tmp_path):
     with FakeFleet(abort_finish_reason=True) as fleet:
         profile = write_profile(tmp_path, fleet)

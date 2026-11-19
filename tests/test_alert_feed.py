@@ -100,6 +100,7 @@ def run_dir(tmp_path, records, verification_class="fleet", comparison=None, **ou
         "schema": "llmdv.outcome/1",
         "run_id": d.name,
         "profile": {"name": "fleet-a"},
+        "identity": {"trigger": "nightly"},
         "labels": {"trigger": "nightly"},
         "started": "2026-10-08T02:00:00+00:00",
         "finished": "2026-10-08T02:40:00+00:00",
@@ -116,7 +117,12 @@ def compared(history, after):
     delta = compare_window(history, after)
     from llmdv.compare.report import as_record
 
-    return as_record(delta, "2026-10-07T02-00-00Z-0000", "2026-10-08T02-00-00Z-abcd")
+    return as_record(
+        delta,
+        "2026-10-07T02-00-00Z-0000",
+        "2026-10-08T02-00-00Z-abcd",
+        {"trigger": "nightly"},
+    )
 
 
 def results_of(feed):
@@ -134,6 +140,7 @@ def test_a_regression_is_marked_and_a_known_failure_is_not(tmp_path):
     assert got[("a", "router")]["reason"] == "finish_reason abort"
     assert feed["comparison"]["made"] is True
     assert feed["comparison"]["baseline"] == "2026-10-07T02-00-00Z-0000"
+    assert feed["identity"] == {"trigger": "nightly"}
 
 
 def test_without_a_comparison_no_verdict_can_read_as_a_regression(tmp_path):
@@ -144,10 +151,16 @@ def test_without_a_comparison_no_verdict_can_read_as_a_regression(tmp_path):
 
 
 def test_a_comparison_that_could_not_be_made_says_why(tmp_path):
-    comparison = {"schema": "llmdv.comparison/1", "made": False, "reason": "archive unreachable"}
+    comparison = {
+        "schema": "llmdv.comparison/1",
+        "made": False,
+        "reason": "archive unreachable",
+        "identity": {"trigger": "manual"},
+    }
     feed = alerts.build(run_dir(tmp_path, [router("a", "fail")], comparison=comparison))
 
     assert feed["comparison"] == {"made": False, "reason": "archive unreachable"}
+    assert feed["identity"] == {"trigger": "nightly"}
     assert feed["results"][0]["transition"] == "unbaselined"
 
 
@@ -254,6 +267,7 @@ def test_compare_writes_its_verdicts_as_data_beside_the_report(tmp_path):
     record = json.loads((d / COMPARISON_JSON).read_text())
 
     assert record["made"] is True and record["regressed"] is True
+    assert record["identity"] == {"trigger": "nightly"}
     assert record["baseline"] == "2026-01-01T00Z"
     assert record["transitions"] == [
         {
@@ -277,6 +291,7 @@ def test_compare_records_why_it_made_no_comparison(tmp_path):
     record = json.loads((d / COMPARISON_JSON).read_text())
 
     assert record["made"] is False
+    assert record["identity"] == {}
     assert "no earlier nightly run" in record["reason"]
 
 

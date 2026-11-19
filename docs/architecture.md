@@ -85,10 +85,11 @@ unreadable list is only a warning, because the check could not decide.
 ## Run identity
 
 Each run records one fixed identity in `outcome.json`, `alerts.json` and `comparison.json`.
-Guide, engine, gateway and model come from the profile; accelerator, provider, `llm_d_ref` and
-trigger come from `--identity`; llmdv records its version and the profile digest. Automatic
-comparisons require matching configuration dimensions, so different overlays cannot become one
-another's baselines.
+Guide and model come from the profile; engine and gateway come from the `implementation` on their
+role layers; accelerator, provider, `llm_d_ref` and trigger come from `--identity`; llmdv records
+its version and the profile digest. Automatic comparisons require matching configuration
+dimensions, so different overlays cannot become one another's baselines. An unreadable archived
+identity is an archive/environment error, not a legacy run.
 
 ## A run, end to end
 
