@@ -828,6 +828,7 @@ def plan_row(item: pytest.Item) -> dict[str, Any]:
         if decided is not None:
             skip_class, reason = decided[0].value, decided[1]
     ingress = _ingress_from_params(item, profile)
+    rule = sampling.rule_for(item, ingress)
     case_marker = item.get_closest_marker("case_id")
     selectable = known_markers()
     return {
@@ -837,6 +838,7 @@ def plan_row(item: pytest.Item) -> dict[str, Any]:
         "ingress": ingress.id if ingress else None,
         "variant": _variant(item),
         "surface": surface_of(item),
+        "samples": rule.n if rule is not None else None,
         "markers": sorted({mark.name for mark in item.iter_markers()} & selectable),
         "outcome": "skip" if reason is not None else "run",
         "skip_class": skip_class,

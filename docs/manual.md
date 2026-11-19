@@ -92,8 +92,9 @@ reporting `PASSED`.
 ### See what will run
 
 `llmdv plan` takes the same profile and selectors as `verify` and lists every case `verify` would
-run, and every case it would skip with its [skip class](#skip-classes) and reason. It sends no
-request, runs no preflight and reads no cluster, so it works before any port-forward is up:
+run, and every case it would skip with its [skip class](#skip-classes) and reason. Statistical
+cases also show their resolved sample count per group, including an ingress override. It sends
+no request, runs no preflight and reads no cluster, so it works before any port-forward is up:
 
 ```sh
 llmdv plan --profile P -m contract            # counts per suite and skip class, then the cases
