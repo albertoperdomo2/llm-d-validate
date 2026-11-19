@@ -247,14 +247,10 @@ def check_model_echo(completion: Completion, model: Model) -> None:
 @pytest.fixture
 def samples(request, ingress: Ingress) -> sampling.Rule:
     """The case's statistical rule: its `samples` marker, with the profile's entry applied."""
-    marker = request.node.get_closest_marker("samples")
-    if marker is None:
+    rule = sampling.rule_for(request.node, ingress)
+    if rule is None:
         raise pytest.UsageError(f"{request.node.nodeid} uses `samples` without the marker")
-    case = request.node.get_closest_marker("case_id")
-    case_id = case.args[0] if case and case.args else request.node.name
-    default = sampling.Rule(*marker.args, **marker.kwargs)
-    override = ingress.capabilities.samples.get(case_id)
-    return sampling.resolve(default, override, f"capabilities.samples.{case_id}")
+    return rule
 
 
 def last_seq(client) -> int:

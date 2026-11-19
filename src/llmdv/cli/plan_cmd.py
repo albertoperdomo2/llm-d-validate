@@ -169,6 +169,8 @@ def _text(document: dict, counts_only: bool) -> list[str]:
             if row["variant"]:
                 case = f"{case} [{row['variant']}]"
             line = f"  {row['outcome']:4}  {(row['ingress'] or '-'):10} {case}"
+            if row["samples"] is not None:
+                line += f"  -- {row['samples']} samples/group"
             if row["outcome"] == "skip":
                 why = _strip_class(row["reason"])
                 line += f"  -- {row['skip_class'] or 'unclassified'}: {why}"

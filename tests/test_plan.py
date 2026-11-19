@@ -178,6 +178,35 @@ def test_the_document_carries_rows_and_counts(tmp_path):
     assert document["selection"]["marker"] == "discovery"
 
 
+def test_plan_reports_default_and_ingress_sample_counts(tmp_path):
+    profile = _pointed("profiles/examples/example-two-ingress.yaml", tmp_path)
+    raw = yaml.safe_load(profile.read_text())
+    raw["ingresses"][0]["capabilities"] = {
+        "chat_repeats": ["greedy", "fresh"],
+        "samples": {"openai_chat.greedy_repeat": {"n": 5, "min": 4}},
+    }
+    profile.write_text(yaml.safe_dump(raw))
+
+    document = _plan(profile, "--ingress", "vllm")
+    rows = {row["case_id"]: row for row in document["cases"]}
+
+    assert rows["openai_chat.greedy_repeat"]["samples"] == 5
+    assert rows["openai_chat.fresh_generation"]["samples"] == 2
+    assert (
+        next(
+            row
+            for row in rows.values()
+            if row["case_id"] == "discovery.models_lists_declared_model"
+        )["samples"]
+        is None
+    )
+
+    text = run_llmdv("plan", "--profile", str(profile), "--ingress", "vllm")
+    assert text.returncode == 0, text.stderr
+    assert "openai_chat.greedy_repeat" in text.stdout
+    assert "5 samples/group" in text.stdout
+
+
 def test_a_skip_names_its_class_and_reason(tmp_path):
     rows = _plan(_profile(tmp_path), "--ingress", "router")["cases"]
     skipped = [row for row in rows if row["outcome"] == "skip"]

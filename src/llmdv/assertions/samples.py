@@ -165,6 +165,18 @@ def sample(
     return Sample(_reduce(value), scrub(text)[:PREVIEW_CHARS], exchange, group)
 
 
+def rule_for(node: Any, ingress: Any) -> Rule | None:
+    """Resolve the statistical rule marker and ingress override for a collected case."""
+    marker = node.get_closest_marker("samples")
+    if marker is None:
+        return None
+    case = node.get_closest_marker("case_id")
+    case_id = case.args[0] if case and case.args else node.name
+    default = Rule(*marker.args, **marker.kwargs)
+    override = ingress.capabilities.samples.get(case_id) if ingress is not None else None
+    return resolve(default, override, f"capabilities.samples.{case_id}")
+
+
 def draw(rule: Rule, take: Callable[[str | None], Sample]) -> list[Sample]:
     """Exactly n samples per group, taken round-robin so drift in the fleet spreads evenly.
 
