@@ -499,7 +499,24 @@ def test_job_analyze_dashboard_carries_alerts_and_the_comparison(tmp_path):
         json.dumps({"case_id": "discovery.models_lists_declared_model", "ingress": "fake",
                     "surface": None, "outcome": "pass"}) + "\n"
     )  # fmt: skip
-    (baseline / "outcome.json").write_text(json.dumps({"labels": {"trigger": "nightly"}}))
+    (baseline / "outcome.json").write_text(
+        json.dumps(
+            {
+                "identity": {
+                    "guide": None,
+                    "accelerator": None,
+                    "engine": None,
+                    "provider": None,
+                    "gateway": None,
+                    "model": "fake/Model-1B",
+                    "llm_d_ref": None,
+                    "llmdv_version": None,
+                    "profile_digest": None,
+                    "trigger": "manual",
+                }
+            }
+        )
+    )
     manifest.write(baseline)
     with FakeFleet() as fleet, FakeS3() as store, FakeSlack() as slack:
         store.objects.update(
