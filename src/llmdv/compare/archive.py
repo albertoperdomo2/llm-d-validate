@@ -257,7 +257,9 @@ def read_outcome(uri: str, profile: str, run_id: str) -> dict | None:
             body = json.loads(path.read_text(encoding="utf-8"))
         except Exception as exc:  # noqa: BLE001 -- filesystem and JSON failures are environment errors
             raise ArchiveUnreadable(_unreadable(f"read {path}", exc)) from exc
-        return body if isinstance(body, dict) else None
+        if not isinstance(body, dict):
+            raise ArchiveUnreadable(f"{path} is not a JSON object")
+        return body
     if target.scheme == "s3":
         from ..output.s3 import sdk_errors
 
@@ -279,7 +281,9 @@ def read_outcome(uri: str, profile: str, run_id: str) -> dict | None:
             raise ArchiveUnreadable(
                 _unreadable(f"read {profile}/{run_id}/outcome.json", exc)
             ) from exc
-        return body if isinstance(body, dict) else None
+        if not isinstance(body, dict):
+            raise ArchiveUnreadable(f"{profile}/{run_id}/outcome.json is not a JSON object")
+        return body
     return None
 
 

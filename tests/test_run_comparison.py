@@ -145,6 +145,7 @@ import json  # noqa: E402
 
 import pytest  # noqa: E402
 
+from llmdv.cli import compare_cmd  # noqa: E402
 from llmdv.cli.main import main  # noqa: E402
 from llmdv.compare.archive import (  # noqa: E402
     ArchiveUnreadable,
@@ -212,6 +213,13 @@ def test_a_present_but_unreadable_outcome_is_an_archive_error(tmp_path):
         read_outcome(f"file://{tmp_path}", "p", "r1")
 
 
+def test_a_non_object_outcome_is_an_archive_error(tmp_path):
+    archive(tmp_path, runs={"r1": [rec("a", "pass")]})
+    (tmp_path / "p" / "r1" / "outcome.json").write_text("[]")
+    with pytest.raises(ArchiveUnreadable, match="not a JSON object"):
+        read_outcome(f"file://{tmp_path}", "p", "r1")
+
+
 def test_reading_a_missing_run_says_which_one(tmp_path):
     with pytest.raises(NoSuchRun, match="r9"):
         read_results(archive(tmp_path), "p", "r9")
@@ -223,6 +231,16 @@ def test_the_default_pair_is_the_two_most_recent():
 
 def test_a_named_baseline_is_compared_against_the_latest():
     assert pick_pair(["r1", "r2", "r3"], baseline="r1") == ("r1", "r3")
+
+
+def test_metadata_failure_during_standalone_compare_is_environment_error(tmp_path, monkeypatch):
+    uri = archive(tmp_path, runs={"r1": [rec("a", "pass")], "r2": [rec("a", "pass")]})
+    monkeypatch.setattr(
+        compare_cmd,
+        "read_stack",
+        lambda *args: (_ for _ in ()).throw(ArchiveUnreadable("transient metadata read")),
+    )
+    assert main(["compare", "--from", uri, "--profile", "p", "--baseline", "r1"]) == 3
 
 
 def test_a_single_run_refuses_rather_than_reporting_a_clean_comparison():

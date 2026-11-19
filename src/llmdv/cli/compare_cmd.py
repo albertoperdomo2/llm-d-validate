@@ -320,21 +320,25 @@ def run(args: argparse.Namespace) -> int:
         log.error("%s", exc)
         return PREFLIGHT
 
-    if delta.digest_changed:
-        delta.profile_diff = declaration_diff(
-            read_profile(args.source, args.profile, before_id),
-            read_profile(args.source, args.profile, after_id),
+    try:
+        if delta.digest_changed:
+            delta.profile_diff = declaration_diff(
+                read_profile(args.source, args.profile, before_id),
+                read_profile(args.source, args.profile, after_id),
+            )
+        attach_stack(
+            delta,
+            read_stack(args.source, args.profile, before_id),
+            read_stack(args.source, args.profile, after_id),
         )
-    attach_stack(
-        delta,
-        read_stack(args.source, args.profile, before_id),
-        read_stack(args.source, args.profile, after_id),
-    )
 
-    notes = _identity_notes(
-        read_identity(args.source, args.profile, before_id),
-        read_identity(args.source, args.profile, after_id),
-    )
+        notes = _identity_notes(
+            read_identity(args.source, args.profile, before_id),
+            read_identity(args.source, args.profile, after_id),
+        )
+    except ArchiveUnreadable as exc:
+        log.error("%s", exc)
+        return PREFLIGHT
 
     emit("")
     for line in render(delta, args.profile, before_id, after_id).splitlines():

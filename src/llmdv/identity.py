@@ -44,7 +44,7 @@ class IdentityError(ValueError):
 
 
 def _layer_implementation(profile: Profile, role: str, legacy: str) -> str | None:
-    """Read an implementation from its role layer, with compatibility for old profiles."""
+    """Read an implementation from its role layer, with legacy top-level compatibility."""
     for ingress in profile.ingresses:
         if getattr(ingress, "role", None) == role:
             return getattr(ingress, "implementation", None)
