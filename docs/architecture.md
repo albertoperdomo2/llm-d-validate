@@ -79,8 +79,13 @@ fleet. In-cluster, the same profile points at Service DNS and `setup` is empty.
 
 Preflight also sends one authenticated `GET /v1/models` per reachable ingress, since health paths
 are exempt from auth. A 401 is a `credentials` problem and a list that omits the profile's
-`public_id` is an `access` problem, both exit 3 before any case runs; a 403, a 404 or an
-unreadable list is only a warning, because the check could not decide.
+`public_id` is an `access` problem, both exit 3 before any case runs. If the profile declares
+`model.max_model_len`, the same response is compared when it reports `max_model_len`; an omitted
+window is recorded as unchecked and does not stop the run. Finally, each declared API is probed
+with the same shape-valid body used by the contract suite. A mismatch names the profile field and
+the deployment's observed value, exits 3, and says only that the two disagree. A 403, a 404 or an
+unreadable model list is a warning for the model-list check; declared API probes still run and
+decide independently when their routes answer.
 
 ## Run identity
 
@@ -159,7 +164,8 @@ is not shipped.
 ### `cli/`
 One module per subcommand: `verify_cmd.py` (embeds pytest and owns the run directory, which it
 publishes however verification ends), `plan_cmd.py` (the same collection stopped before any
-case runs), `job_cmd.py`, `publish_cmd.py`, `notify_cmd.py`, `compare_cmd.py`, `analyze_cmd.py`
+case runs, including resolved statistical sample counts), `job_cmd.py`, `publish_cmd.py`,
+`notify_cmd.py`, `compare_cmd.py`, `analyze_cmd.py`
 and `profile_cmd.py` (offline except `show --setup`).
 `main.py` holds the shared flags; `banner.py`, `contract_display.py` and `style.py` render output;
 `exit_codes.py` holds the codes; `verify_cmd._finish` and `job_cmd._exit_code` apply their precedence.

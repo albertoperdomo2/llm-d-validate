@@ -59,6 +59,12 @@ Cases run grouped by phase, contract first, then by ingress in the order the pro
 them. `-v` prints the recorded checks under each case. How llmdv finds a cluster CLI, and which
 stream gets what, is in [docs/architecture.md](architecture.md#how-a-request-reaches-the-fleet).
 
+Before collection, preflight compares each declared `model.max_model_len` with the matching
+`max_model_len` in `GET /v1/models` when the deployment reports one, and probes every declared
+API with the contract suite's shape-valid request. A mismatch exits `3` before any case runs and
+names the profile field and observed deployment value. If the deployment omits its context
+window, preflight records that it could not check it and continues.
+
 ## Selecting what runs
 
 ```sh
@@ -86,8 +92,9 @@ reporting `PASSED`.
 ### See what will run
 
 `llmdv plan` takes the same profile and selectors as `verify` and lists every case `verify` would
-run, and every case it would skip with its [skip class](#skip-classes) and reason. It sends no
-request, runs no preflight and reads no cluster, so it works before any port-forward is up:
+run, and every case it would skip with its [skip class](#skip-classes) and reason. Statistical
+cases also show their resolved sample count per group, including an ingress override. It sends
+no request, runs no preflight and reads no cluster, so it works before any port-forward is up:
 
 ```sh
 llmdv plan --profile P -m contract            # counts per suite and skip class, then the cases
