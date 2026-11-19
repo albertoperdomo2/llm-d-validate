@@ -16,6 +16,7 @@ PN = "PN"
 inline_sytem = "inline_sytem"
 error_envlope = "error_envlope"
 blok_size = "blok_size"
+modle = "modle"
 effort_efect = "effort_efect"
 # A possessive inside a test name ("the entry's own ingress").
 test_every_awaited_signal_must_have_answered_from_the_entrys_own_ingress = "test_every_awaited_signal_must_have_answered_from_the_entrys_own_ingress"
