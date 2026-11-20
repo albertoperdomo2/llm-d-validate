@@ -365,6 +365,10 @@ def test_definition_cases(tmp_path, test, defect, failing, check):
         ),
         ("test_namespace", None, {"responses": "pass"}),
         ("test_namespace", "tool_type_5xx", {"responses": "fail"}),
+        ("test_additional_tools_item", None, {"responses": "pass"}),
+        # Undeclared, a clean refusal is an honest answer; a silent drop is not.
+        ("test_additional_tools_item", "rejects_additional_tools", {"responses": "pass"}),
+        ("test_additional_tools_item", "drops_additional_tools", {"responses": "fail"}),
         ("test_input_examples", None, {"messages": "pass"}),
         ("test_input_examples", "input_examples_5xx", {"messages": "fail"}),
         ("test_eager_input_streaming", None, {"messages": "pass"}),
@@ -386,6 +390,31 @@ def test_tool_type_cases(tmp_path, test, defect, expected):
             got.setdefault(row["surface"], set()).add(row["outcome"])
     assert {s: "fail" if "fail" in o else "pass" for s, o in got.items()} == expected, got
     assert code == (1 if "fail" in expected.values() else 0)
+
+
+@pytest.mark.parametrize(
+    "disposition,defect,outcome,check",
+    [
+        ("accepted", None, "pass", None),
+        ("accepted", "rejects_additional_tools", "fail", "http_status"),
+        ("accepted", "drops_additional_tools", "fail", "tool_call_count"),
+        ("ignored", "drops_additional_tools", "pass", None),
+    ],
+)
+def test_additional_tools_declared(tmp_path, disposition, defect, outcome, check):
+    with FakeFleet(tool_engine=True, tool_engine_defect=defect) as fleet:
+        path = write_profile(tmp_path, fleet)
+        raw = yaml.safe_load(path.read_text())
+        raw["ingresses"][0]["surfaces"] = ["responses"]
+        raw["model"]["tools"] = {"parser": "example-parser"}
+        raw["capabilities"]["responses_features"] = {"additional_tools": disposition}
+        path.write_text(yaml.safe_dump(raw))
+        code, records = run_suites(path, tmp_path / "run", "-k", "test_additional_tools_item")
+    (row,) = [r for r in records if r.get("surface") == "responses"]
+    assert row["outcome"] == outcome, row
+    if check:
+        assert next(c["name"] for c in row["checks"] if c.get("ok") is False) == check, row
+    assert code == (1 if outcome == "fail" else 0)
 
 
 # ---------------------------------------------------------------------------- round two
